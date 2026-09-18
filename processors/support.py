@@ -131,7 +131,7 @@ def assess_support(
         score -= 15
         reasons.append("-15 sources contradict each other (disagreement preserved below)")
 
-    assessment.score = max(0.0, min(100.0, score))
+    assessment.score = round(max(0.0, min(100.0, score)), 1)
     assessment.label = _label_for(assessment.score)
     if verification.has_conflict:
         assessment.label = "CONTESTED - SOURCES DISAGREE"

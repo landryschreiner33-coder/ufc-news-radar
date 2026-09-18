@@ -24,9 +24,9 @@ from processors import fight_cards, relevance, support, trending, verification
 from processors.clustering import StoryMatcher, assign_article
 from processors.enrich import enrich_article, enrich_social_post
 from processors.entities import find_events, find_fighters, get_fighter_index, reset_fighter_index
-from processors.similarity import set_similarity, title_similarity
+from processors.similarity import set_similarity
 from utils.logging_setup import get_logger
-from utils.textutil import normalize_text
+from utils.textutil import jaccard, normalize_text, token_set
 from utils.timeutil import age_hours, utcnow_iso
 
 logger = get_logger(__name__)
@@ -266,16 +266,31 @@ def link_social_posts(hours: int = 48, min_score: float = 0.34) -> int:
         for story in candidates:
             fighter_overlap = set_similarity(post_fighters, story.get("fighters") or [])
             event_overlap = set_similarity(post_events, story.get("events") or [])
-            text_score = title_similarity(post.get("text") or "", story.get("headline") or "")
-            score = 0.45 * fighter_overlap + 0.25 * event_overlap + 0.30 * text_score
+            post_tokens = token_set(post.get("text") or "")
+            story_tokens = token_set(
+                f"{story.get('headline') or ''} {' '.join(story.get('fighters') or [])}"
+            )
+            shared_tokens = len(post_tokens & story_tokens)
+            # Jaccard (not overlap ratio): a short, vague post must not match
+            # every long headline that happens to share a word or two.
+            text_score = jaccard(post_tokens, story_tokens)
+            has_entities = bool(
+                post_fighters or post_events or story.get("fighters") or story.get("events")
+            )
+            if has_entities:
+                score = 0.45 * fighter_overlap + 0.25 * event_overlap + 0.30 * text_score
+            else:  # nothing to match on but the wording - lean on it
+                score = 0.85 * text_score
             if post_fighters and (story.get("fighters") or []) and fighter_overlap == 0:
                 continue
+            if fighter_overlap == 0 and event_overlap == 0 and shared_tokens < 3:
+                continue  # too little in common to attribute the post to a story
             if score > best_score:
                 best_story, best_score = story, score
                 reasons = [
                     f"fighter overlap {fighter_overlap:.2f}",
                     f"event overlap {event_overlap:.2f}",
-                    f"text similarity {text_score:.2f}",
+                    f"text similarity {text_score:.2f} ({shared_tokens} shared terms)",
                 ]
         if best_story and best_score >= min_score:
             social_repo.link_post_to_story(int(best_story["id"]), int(post["id"]), best_score, reasons)

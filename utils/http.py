@@ -172,6 +172,57 @@ class HttpClient:
         result.ok = True
         return result
 
+    def post_json(
+        self,
+        url: str,
+        payload: Dict[str, Any],
+        headers: Optional[Dict[str, str]] = None,
+        timeout: Optional[int] = None,
+        max_retries: int = 1,
+    ) -> HttpResult:
+        """POST JSON (used by the AI providers). Never raises."""
+        request_headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        request_headers.update(headers or {})
+        attempts = max_retries + 1
+        last = HttpResult(url=url, error="not attempted", error_kind="connection")
+        for attempt in range(attempts):
+            started = time.monotonic()
+            try:
+                response = self.session.post(
+                    url, json=payload, headers=request_headers, timeout=timeout or self.timeout
+                )
+            except requests.exceptions.Timeout as exc:
+                last = HttpResult(url=url, error=f"timeout: {_short(exc)}", error_kind="timeout",
+                                  elapsed_ms=_ms(started))
+            except requests.exceptions.RequestException as exc:
+                last = HttpResult(url=url, error=f"request failed: {_short(exc)}",
+                                  error_kind="connection", elapsed_ms=_ms(started))
+            except Exception as exc:
+                last = HttpResult(url=url, error=f"unexpected error: {_short(exc)}",
+                                  error_kind="connection", elapsed_ms=_ms(started))
+            else:
+                headers_out = {k.lower(): v for k, v in response.headers.items()}
+                last = HttpResult(status_code=response.status_code, url=str(response.url),
+                                  headers=headers_out, elapsed_ms=_ms(started))
+                if response.status_code == 429:
+                    last.error_kind = "rate_limit"
+                    last.error = "rate limited by provider (HTTP 429)"
+                    last.rate_limit_reset_epoch = _reset_epoch(headers_out)
+                elif response.status_code >= 400:
+                    last.error_kind = "http"
+                    last.error = f"HTTP {response.status_code}: {(response.text or '')[:300]}"
+                else:
+                    last.ok = True
+                    last.text = response.text
+                    last.content = response.content
+            retryable = last.error_kind in ("timeout", "connection") or (
+                last.status_code in RETRYABLE_STATUS if last.status_code else False
+            )
+            if last.ok or not retryable or attempt == attempts - 1:
+                return last
+            time.sleep(self.backoff_seconds * (2 ** attempt))
+        return last
+
     def get_json(self, url: str, **kwargs: Any) -> HttpResult:
         headers = dict(kwargs.pop("headers", {}) or {})
         headers.setdefault("Accept", "application/json")
