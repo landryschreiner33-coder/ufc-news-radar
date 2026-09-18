@@ -1,0 +1,15 @@
+# Dark theme for UFC News Radar (works in Chrome on Windows).
+[theme]
+base = "dark"
+primaryColor = "#d20a0a"
+backgroundColor = "#0b0e13"
+secondaryBackgroundColor = "#151a23"
+textColor = "#e8eaed"
+font = "sans serif"
+
+[server]
+headless = true
+fileWatcherType = "auto"
+
+[browser]
+gatherUsageStats = false

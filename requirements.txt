@@ -1,0 +1,14 @@
+# UFC News Radar - Python dependencies
+# Install with:  pip install -r requirements.txt
+
+streamlit==1.64.0          # dashboard UI
+feedparser==6.0.14         # RSS/Atom parsing for news collectors
+requests==2.34.2           # HTTP client (news pages, UFC.com, X API)
+beautifulsoup4==4.15.0     # HTML parsing (UFC rankings / event pages)
+lxml==6.1.3                # fast HTML/XML parser backend for BeautifulSoup
+trafilatura==2.2.0         # main-content extraction from article pages
+scikit-learn==1.9.1        # TF-IDF + cosine similarity for story clustering
+pandas==3.0.6              # small tables in the UI
+python-dotenv==1.2.3       # load API keys from .env
+python-dateutil==2.9.0.post0  # tolerant date parsing for feeds
+pytest==9.1.1              # test suite
