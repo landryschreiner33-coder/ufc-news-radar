@@ -163,6 +163,10 @@ def canonical_url(url: Optional[str]) -> str:
     scheme = (parsed.scheme or "https").lower()
     if scheme not in ("http", "https"):
         return raw
+    if not parsed.netloc:
+        return raw  # not a URL at all - hand it back untouched
+    # http:// and https:// copies of one article are the same article.
+    scheme = "https"
     netloc = parsed.netloc.lower()
     if netloc.startswith("www."):
         netloc = netloc[4:]

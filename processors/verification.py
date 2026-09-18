@@ -280,12 +280,17 @@ def _decide_status(
         return StoryStatus.CONFIRMED.value
     if result.official_confirmed and result.has_conflict:
         return StoryStatus.DEVELOPING.value
-    if result.has_conflict:
+    # DEVELOPING needs a credible source behind it. Low-quality accounts
+    # repeating each other - even while contradicting each other - never lift a
+    # rumour into a developing story.
+    if result.has_conflict and result.independent_source_count >= 1:
         return StoryStatus.DEVELOPING.value
-    # DEVELOPING means "moving AND unresolved": new material is still arriving
-    # and the reporting is still hedged. Firm multi-source reporting is REPORTED.
+    # DEVELOPING also means "moving AND unresolved": new material is still
+    # arriving and the reporting is still hedged. Firm multi-source reporting
+    # is REPORTED.
     if (
         result.is_developing
+        and result.independent_source_count >= 1
         and not result.official_confirmed
         and result.speculation_score >= 0.34
     ):

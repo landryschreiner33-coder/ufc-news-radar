@@ -57,7 +57,12 @@ def extract_from_html(html: str) -> Tuple[str, str, Optional[str]]:
 def _fallback_extract(html: str) -> str:
     """Very small BeautifulSoup fallback when trafilatura finds nothing."""
     try:
-        from bs4 import BeautifulSoup
+        import warnings
+
+        from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
+
+        # A URL can return XML instead of a page; that is not worth a warning.
+        warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
         try:
             soup = BeautifulSoup(html, "lxml")

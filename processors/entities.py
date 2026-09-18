@@ -52,7 +52,8 @@ class FighterIndex:
     """Lookup table built once per pipeline run (not per article)."""
 
     by_phrase: Dict[str, str] = field(default_factory=dict)   # normalized phrase -> display name
-    surnames: Dict[str, str] = field(default_factory=dict)    # unique surname -> display name
+    surnames: Dict[str, str] = field(default_factory=dict)    # unique, unambiguous surname -> name
+    all_surnames: Dict[str, str] = field(default_factory=dict)  # every unique surname, incl. ambiguous
     built_at: str = ""
 
     @property
@@ -83,11 +84,17 @@ def build_fighter_index(fighters: Optional[List[Dict[str, Any]]] = None) -> Figh
         parts = normalize_text(name).split()
         if len(parts) >= 2:
             surname = parts[-1]
-            if len(surname) >= 5 and surname not in AMBIGUOUS_SURNAMES:
+            if len(surname) >= 4:
                 surname_counts.setdefault(surname, set()).add(name)
     for surname, owners in surname_counts.items():
-        if len(owners) == 1:
-            index.surnames[surname] = next(iter(owners))
+        if len(owners) != 1:
+            continue
+        owner = next(iter(owners))
+        index.all_surnames[surname] = owner
+        # Surnames shared by several well-known fighters only match when there
+        # is other evidence (see _resolve_name's allow_ambiguous path).
+        if len(surname) >= 5 and surname not in AMBIGUOUS_SURNAMES:
+            index.surnames[surname] = owner
     return index
 
 
@@ -162,6 +169,12 @@ def find_matchups(text: str, index: Optional[FighterIndex] = None) -> List[Tuple
     for match in _VS_PATTERN.finditer(text):
         left = _resolve_name(match.group(1), index)
         right = _resolve_name(match.group(2), index)
+        # "Jones vs. Aspinall": once one side is a known fighter, a bare
+        # surname on the other side is safe enough to resolve.
+        if left and not right:
+            right = _resolve_name(match.group(2), index, allow_ambiguous_surname=True)
+        elif right and not left:
+            left = _resolve_name(match.group(1), index, allow_ambiguous_surname=True)
         if left and right and normalize_text(left) != normalize_text(right):
             pair = (left, right)
             if pair not in matchups and (right, left) not in matchups:
@@ -169,7 +182,9 @@ def find_matchups(text: str, index: Optional[FighterIndex] = None) -> List[Tuple
     return matchups[:4]
 
 
-def _resolve_name(raw: str, index: FighterIndex) -> Optional[str]:
+def _resolve_name(
+    raw: str, index: FighterIndex, allow_ambiguous_surname: bool = False
+) -> Optional[str]:
     """Map a captured name fragment onto a registry fighter when we can."""
     cleaned = collapse_whitespace(raw or "").strip(" .,:;-")
     if not cleaned:
@@ -180,6 +195,8 @@ def _resolve_name(raw: str, index: FighterIndex) -> Optional[str]:
     parts = normalized.split()
     if parts and parts[-1] in index.surnames:
         return index.surnames[parts[-1]]
+    if allow_ambiguous_surname and parts and parts[-1] in index.all_surnames:
+        return index.all_surnames[parts[-1]]
     # Trim leading words that are not part of a name ("Report: Jones vs ...").
     for start in range(1, len(parts)):
         tail = " ".join(parts[start:])

@@ -125,10 +125,19 @@ def query_value(sql: str, params: Sequence[Any] | Dict[str, Any] = (), default: 
 
 
 def execute(sql: str, params: Sequence[Any] | Dict[str, Any] = ()) -> int:
-    """Run a statement and return lastrowid (or rowcount for updates)."""
+    """Run a statement.
+
+    Returns the new row id for an INSERT that actually inserted, and the
+    affected row count otherwise.  The distinction matters for
+    ``INSERT OR IGNORE``: SQLite leaves ``lastrowid`` pointing at the previous
+    insert, so returning it blindly would report a write that never happened.
+    """
     with transaction() as connection:
         cursor = connection.execute(sql, params)
-        return cursor.lastrowid if cursor.lastrowid else cursor.rowcount
+        is_insert = sql.lstrip()[:6].upper() == "INSERT"
+        if is_insert and cursor.rowcount > 0:
+            return cursor.lastrowid or cursor.rowcount
+        return cursor.rowcount if cursor.rowcount > 0 else 0
 
 
 def execute_many(sql: str, rows: Iterable[Sequence[Any]]) -> int:
