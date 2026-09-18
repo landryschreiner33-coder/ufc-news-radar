@@ -54,8 +54,9 @@ def insert_article(article: Dict[str, Any]) -> Optional[int]:
             "url_hash, domain, title, normalized_title, title_hash, author, published_at, collected_at, "
             "excerpt, content_snippet, content_chars, image_url, category, fighters, events, keywords, "
             "language, source_type, reliability_weight, independence_group, attribution_outlets, "
-            "is_derivative, speculation_score, is_official, story_id, is_demo, raw_json, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "is_derivative, speculation_score, has_denial, is_official, story_id, is_demo, raw_json, "
+            "created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 article.get("source_id"), article.get("source_key"), article.get("source_name"),
                 article.get("external_id"), url, canonical, hashed,
@@ -69,6 +70,7 @@ def insert_article(article: Dict[str, Any]) -> Optional[int]:
                 article.get("reliability_weight"), article.get("independence_group"),
                 json_dump(article.get("attribution_outlets") or []),
                 1 if article.get("is_derivative") else 0, float(article.get("speculation_score") or 0.0),
+                1 if article.get("has_denial") else 0,
                 1 if article.get("is_official") else 0, article.get("story_id"),
                 1 if article.get("is_demo") else 0, json_dump(article.get("raw_json")), now,
             ),

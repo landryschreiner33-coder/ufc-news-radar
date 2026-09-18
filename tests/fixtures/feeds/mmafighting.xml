@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>MMA Fighting</title>
+    <link>https://example.test/</link>
+    <item>
+      <title>Jon Jones vs. Tom Aspinall booked as UFC 320 headliner</title>
+      <link>https://www.mmafighting.com/2026/9/18/jones-aspinall-booked</link>
+      <pubDate>Thu, 18 Sep 2026 15:35:00 +0000</pubDate>
+      <dc:creator>Damon Martin</dc:creator>
+      <description>Jon Jones and Tom Aspinall will meet in the UFC 320 main event, the promotion announced.</description>
+    </item>
+    <item>
+      <title>Alex Pereira injury: champion reportedly out of planned return bout</title>
+      <link>https://www.mmafighting.com/2026/9/18/pereira-injury-report</link>
+      <pubDate>Thu, 18 Sep 2026 13:10:00 +0000</pubDate>
+      <dc:creator>Mike Heck</dc:creator>
+      <description>Alex Pereira is expected to be out with a hand injury, according to sources, though nothing has been confirmed by the UFC.</description>
+    </item>
+  </channel>
+</rss>

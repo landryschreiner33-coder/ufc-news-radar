@@ -168,6 +168,7 @@ CREATE TABLE IF NOT EXISTS articles (
     attribution_outlets TEXT,               -- JSON array: outlets this piece credits
     is_derivative       INTEGER NOT NULL DEFAULT 0,
     speculation_score   REAL    NOT NULL DEFAULT 0,
+    has_denial          INTEGER NOT NULL DEFAULT 0,
     is_official         INTEGER NOT NULL DEFAULT 0,
     story_id            INTEGER REFERENCES stories(id) ON DELETE SET NULL,
     is_demo             INTEGER NOT NULL DEFAULT 0,

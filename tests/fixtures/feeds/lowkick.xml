@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>LowKick MMA</title>
+    <link>https://example.test/</link>
+    <item>
+      <title>Rumor: Alex Pereira could be out of his next fight with injury</title>
+      <link>https://www.lowkickmma.com/pereira-rumor-injury</link>
+      <pubDate>Thu, 18 Sep 2026 14:00:00 +0000</pubDate>
+      <dc:creator></dc:creator>
+      <description>Speculation is building that Alex Pereira may be forced out, according to ESPN.</description>
+    </item>
+    <item>
+      <title>Conor McGregor teases UFC return in cryptic post</title>
+      <link>https://www.lowkickmma.com/mcgregor-teases-return</link>
+      <pubDate>Thu, 18 Sep 2026 11:00:00 +0000</pubDate>
+      <dc:creator></dc:creator>
+      <description>Conor McGregor says he is coming back soon, rumors suggest a date is near.</description>
+    </item>
+  </channel>
+</rss>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>MMA Junkie</title>
+    <link>https://example.test/</link>
+    <item>
+      <title>Khamzat Chimaev out of UFC 320 bout, per report</title>
+      <link>https://mmajunkie.usatoday.com/2026/09/chimaev-out-ufc-320</link>
+      <pubDate>Thu, 18 Sep 2026 15:45:00 +0000</pubDate>
+      <dc:creator>Nolan King</dc:creator>
+      <description>Khamzat Chimaev is reportedly out of his UFC 320 fight, sources say, with a replacement being sought.</description>
+    </item>
+  </channel>
+</rss>

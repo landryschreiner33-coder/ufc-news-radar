@@ -330,11 +330,33 @@ def card_changes(event_id: Optional[int] = None, limit: int = 50) -> List[Dict[s
     return rows_to_dicts(rows)
 
 
-def card_change_exists(event_id: Optional[int], change_type: str, after_text: Optional[str],
-                       source_article_id: Optional[int]) -> bool:
+def find_card_change(
+    event_id: Optional[int], change_type: str, after_text: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """The same change reported by several outlets is ONE entry in the log."""
     row = query_one(
-        "SELECT 1 FROM fight_card_changes WHERE COALESCE(event_id,-1) = COALESCE(?,-1) AND change_type = ? "
-        "AND COALESCE(after_text,'') = COALESCE(?,'') AND COALESCE(source_article_id,-1) = COALESCE(?,-1)",
-        (event_id, change_type, after_text, source_article_id),
+        "SELECT * FROM fight_card_changes WHERE COALESCE(event_id,-1) = COALESCE(?,-1) "
+        "AND change_type = ? AND COALESCE(after_text,'') = COALESCE(?,'') "
+        "ORDER BY detected_at ASC LIMIT 1",
+        (event_id, change_type, after_text),
     )
-    return row is not None
+    return dict(row) if row else None
+
+
+def card_change_exists(event_id: Optional[int], change_type: str, after_text: Optional[str],
+                       source_article_id: Optional[int] = None) -> bool:
+    return find_card_change(event_id, change_type, after_text) is not None
+
+
+def upgrade_card_change(
+    change_id: int, status: str, source_name: Optional[str] = None,
+    source_url: Optional[str] = None, source_article_id: Optional[int] = None,
+    reason: Optional[str] = None,
+) -> None:
+    """Promote a logged change when a stronger source confirms it."""
+    execute(
+        "UPDATE fight_card_changes SET status = ?, source_name = COALESCE(?, source_name), "
+        "source_url = COALESCE(?, source_url), source_article_id = COALESCE(?, source_article_id), "
+        "reason = COALESCE(?, reason) WHERE id = ?",
+        (status, source_name, source_url, source_article_id, reason, change_id),
+    )

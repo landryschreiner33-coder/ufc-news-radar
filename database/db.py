@@ -25,11 +25,18 @@ from utils.timeutil import utcnow_iso
 logger = get_logger(__name__)
 
 SCHEMA_FILE = PROJECT_ROOT / "database" / "schema.sql"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Future schema changes go here as (version, name, list-of-SQL-statements).
-# Version 1 is the base schema in schema.sql.
-MIGRATIONS: List[tuple] = []
+# Version 1 is the base schema in schema.sql; a fresh database is created at
+# SCHEMA_VERSION so these only run when upgrading an older file.
+MIGRATIONS: List[tuple] = [
+    (
+        2,
+        "articles.has_denial",
+        ["ALTER TABLE articles ADD COLUMN has_denial INTEGER NOT NULL DEFAULT 0"],
+    ),
+]
 
 _local = threading.local()
 _OVERRIDE_PATH: Optional[str] = None
@@ -185,7 +192,13 @@ def apply_migrations(connection: Optional[sqlite3.Connection] = None) -> List[in
             continue
         logger.info("Applying migration %s (%s)", version, name)
         for statement in statements:
-            connection.execute(statement)
+            try:
+                connection.execute(statement)
+            except sqlite3.OperationalError as exc:
+                # A column the base schema already contains is not an error.
+                if "duplicate column" not in str(exc).lower():
+                    raise
+                logger.debug("Migration %s: %s (already applied)", version, exc)
         connection.execute(
             "INSERT OR REPLACE INTO migrations (version, name, applied_at) VALUES (?,?,?)",
             (version, name, utcnow_iso()),
