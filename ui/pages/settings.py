@@ -5,6 +5,7 @@ import streamlit as st
 
 from ai.factory import available_providers
 from ai import service as ai_service
+from database import repo_ai as ai_repo
 from database import repo_settings as settings_repo
 from database import repo_sources as sources_repo
 from database.db import database_stats, current_db_path
@@ -181,6 +182,10 @@ def _render_ai() -> None:
             "<code>AI_PROVIDER=anthropic</code> and <code>ANTHROPIC_API_KEY=...</code> (or the "
             "OpenAI equivalents) in .env and restart."
         )
+    if st.button("Clear cached generations",
+                 help="Summaries, scripts and checks are regenerated on next open."):
+        ai_repo.clear_cache()
+        st.success("Cleared the AI response cache.")
     bullet_list([
         f"Providers available: {', '.join(available_providers())}",
         "Keys are read from environment variables only and are never written to the database.",

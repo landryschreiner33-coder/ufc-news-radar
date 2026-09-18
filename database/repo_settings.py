@@ -80,11 +80,6 @@ def get_bool(key: str, default: bool = False) -> bool:
     return str(value).strip().lower() in TRUE_VALUES
 
 
-def all_settings() -> Dict[str, Any]:
-    rows = query_all("SELECT key, value, value_type FROM settings ORDER BY key")
-    return {row["key"]: _cast(row["value"], row["value_type"], row["value"]) for row in rows}
-
-
 def setting_exists(key: str) -> bool:
     return query_one("SELECT 1 FROM settings WHERE key = ?", (key,)) is not None
 
@@ -207,17 +202,6 @@ def list_watchlist(kind: Optional[str] = None, active_only: bool = True) -> List
         clauses.append("active = 1")
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     return rows_to_dicts(query_all(f"SELECT * FROM watchlists {where} ORDER BY kind, value", params))
-
-
-def watchlist_values(kind: Optional[str] = None) -> List[str]:
-    return [row["value"] for row in list_watchlist(kind)]
-
-
-def record_watchlist_hit(item_id: int) -> None:
-    execute(
-        "UPDATE watchlists SET hit_count = hit_count + 1, last_hit_at = ? WHERE id = ?",
-        (utcnow_iso(), item_id),
-    )
 
 
 # --------------------------------------------- monitored social accounts ---

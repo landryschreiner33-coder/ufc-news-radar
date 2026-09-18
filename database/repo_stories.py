@@ -283,10 +283,3 @@ def dashboard_counts(new_window_hours: int = 24) -> Dict[str, int]:
     }
 
 
-def delete_story(story_id: int) -> None:
-    execute("DELETE FROM stories WHERE id = ?", (story_id,))
-
-
-def all_story_ids(include_demo: bool = True) -> List[int]:
-    where = "" if include_demo else "WHERE is_demo = 0"
-    return [row["id"] for row in query_all(f"SELECT id FROM stories {where}")]

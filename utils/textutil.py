@@ -239,11 +239,6 @@ def excerpt_from(text: Optional[str], max_chars: int = 320) -> str:
     return truncate(" ".join(out), max_chars)
 
 
-def contains_any(text: Optional[str], needles: Iterable[str]) -> bool:
-    haystack = normalize_text(text)
-    return any(normalize_text(n) and normalize_text(n) in haystack for n in needles)
-
-
 def find_quotes(text: Optional[str], min_words: int = 4) -> List[str]:
     """Extract double-quoted spans - used by the AI grounding checker."""
     if not text:

@@ -92,18 +92,3 @@ def timeline_view(story_id: int) -> List[Dict[str, Any]]:
     return view
 
 
-def latest_update_summary(story_id: int) -> Optional[str]:
-    entries = stories_repo.story_timeline(story_id)
-    if not entries:
-        return None
-    last = entries[-1]
-    return f"{format_display(last.get('occurred_at'), '%b %d %H:%M UTC')} - {last.get('headline') or ''}"
-
-
-def refresh_social_links(story_id: int) -> int:
-    """Attach story social posts to the timeline (idempotent)."""
-    count = 0
-    for post in social_repo.posts_for_story(story_id):
-        add_social_timeline_entry(story_id, post)
-        count += 1
-    return count

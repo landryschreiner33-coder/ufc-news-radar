@@ -8,6 +8,7 @@ import streamlit as st
 from ai import service as ai_service
 from ai.context import build_story_context
 from database import repo_entities as entities_repo
+from database import repo_social as social_repo
 from database import repo_stories as stories_repo
 from models.types import category_label, status_style
 from processors import developing as developing_mod
@@ -234,9 +235,16 @@ def _render_sources(context, story_id: int) -> None:
     section_header("SOURCES", len(context.sources))
     source_list(context.sources_for_display())
 
+    engagement = social_repo.engagement_for_story(story_id)
+    engagement_note = ""
+    if engagement.get("posts"):
+        engagement_note = (
+            f" Measured across linked posts: {engagement['likes']:,} likes, "
+            f"{engagement['reposts']:,} reposts, {engagement['replies']:,} replies."
+        )
     section_header("SOCIAL POSTS", len(context.social_posts),
                    note="X posts are signals, not confirmation. Open one for the account type "
-                        "and what it does and does not establish.")
+                        "and what it does and does not establish." + engagement_note)
     if not context.social_posts:
         st.markdown(
             '<div class="muted">No X posts linked to this story. Posts are only linked when they '

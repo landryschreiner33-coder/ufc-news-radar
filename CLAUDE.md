@@ -239,7 +239,7 @@ relevance, fight-card changes, rankings + change detection, X integration
 dashboard with research mode, check-before-reporting and TikTok tools,
 watchlists, search, filters, source health, settings and demo mode.
 
-165 pytest tests pass. The dashboard was driven end-to-end in Chromium: every
+171 pytest tests pass (also verified from a clean virtual environment). The dashboard was driven end-to-end in Chromium: every
 page renders, navigation and tabs work, and the browser console is clean.
 
 See `PROGRESS.md` for the detailed status, bugs fixed and next steps.

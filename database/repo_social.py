@@ -67,12 +67,6 @@ def get_post(post_row_id: int) -> Optional[Dict[str, Any]]:
     return hydrate(query_one("SELECT * FROM social_posts WHERE id = ?", (post_row_id,)))
 
 
-def post_exists(post_id: str, platform: str = "x") -> bool:
-    return query_one(
-        "SELECT 1 FROM social_posts WHERE platform = ? AND post_id = ?", (platform, str(post_id))
-    ) is not None
-
-
 def recent_posts(hours: int = 48, limit: int = 200, include_demo: bool = True) -> List[Dict[str, Any]]:
     demo_clause = "" if include_demo else "AND is_demo = 0"
     return hydrate_all(query_all(
@@ -86,14 +80,6 @@ def latest_posts(limit: int = 50) -> List[Dict[str, Any]]:
     return hydrate_all(query_all(
         "SELECT * FROM social_posts ORDER BY COALESCE(created_at_source, collected_at) DESC LIMIT ?",
         (limit,),
-    ))
-
-
-def posts_by_username(username: str, limit: int = 25) -> List[Dict[str, Any]]:
-    return hydrate_all(query_all(
-        "SELECT * FROM social_posts WHERE username = ? ORDER BY COALESCE(created_at_source, collected_at) "
-        "DESC LIMIT ?",
-        (str(username).lstrip("@").lower(), limit),
     ))
 
 

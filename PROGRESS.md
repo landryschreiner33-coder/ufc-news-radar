@@ -3,7 +3,7 @@
 Living status of UFC News Radar. Updated as work lands.
 
 **Last updated:** 2026-09-18
-**Test status:** ✅ 165 passed (`python -m pytest`)
+**Test status:** ✅ 171 passed (`python -m pytest`)
 **App status:** ✅ starts and runs; every page verified in Chromium, console clean
 
 ---
@@ -90,10 +90,15 @@ Living status of UFC News Radar. Updated as work lands.
 - [x] Demo mode: fictional, labelled, one-click load/remove
 
 ### Quality
-- [x] 165 tests across database, collectors, failures, normalisation, dedupe,
+- [x] 171 tests across database, collectors, failures, normalisation, dedupe,
       clustering, entities, classification, rumours, status transitions,
       relevance/support/trending, rankings, X responses, malformed data,
-      developing updates, watchlists, fight cards, demo data and the AI layer
+      developing updates, watchlists, fight cards, filters/sorting, demo data
+      and the AI layer
+- [x] Verified from a clean virtual environment built only from requirements.txt
+- [x] Dead code removed (22 unused helpers); the three that filled real gaps
+      were wired up instead (delete a source you added, measured X engagement on
+      a story, clear the AI cache)
 - [x] Whole app driven in Chromium (every page, tabs, navigation, forms)
 - [x] README (Windows-exact), CLAUDE.md, PROGRESS.md, .env.example
 
@@ -135,7 +140,7 @@ Fixed during the build (all now covered by tests):
 ## 4. Test status
 
 ```
-python -m pytest        ->  165 passed
+python -m pytest        ->  171 passed
 ```
 
 | Area | File |
@@ -155,6 +160,7 @@ python -m pytest        ->  165 passed
 | Watchlists, classifications, accounts, demo data | `tests/test_watchlists_settings.py` |
 | Fight-card detection and change log | `tests/test_fight_cards.py` |
 | Developing stories and timelines | `tests/test_developing.py` |
+| Feed filters and sort orders | `tests/test_filters.py` |
 
 ---
 

@@ -58,10 +58,6 @@ class Generated:
     warnings: List[str] = field(default_factory=list)
     sources: List[Dict[str, Any]] = field(default_factory=list)
 
-    @property
-    def is_template(self) -> bool:
-        return self.provider == "template"
-
 
 # ============================================================ deterministic ==
 def classify_story(title: str, body: str = "") -> Dict[str, Any]:

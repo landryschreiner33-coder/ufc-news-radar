@@ -34,14 +34,6 @@ def last_run() -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
-def last_successful_run() -> Optional[Dict[str, Any]]:
-    row = query_one(
-        "SELECT * FROM collection_runs WHERE finished_at IS NOT NULL AND error IS NULL "
-        "ORDER BY id DESC LIMIT 1"
-    )
-    return dict(row) if row else None
-
-
 def recent_runs(limit: int = 20) -> List[Dict[str, Any]]:
     return rows_to_dicts(query_all("SELECT * FROM collection_runs ORDER BY id DESC LIMIT ?", (limit,)))
 

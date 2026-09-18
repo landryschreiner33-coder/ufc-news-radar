@@ -57,12 +57,18 @@ def render(run_collection_callback) -> None:
             f'{error_line}</div>',
             unsafe_allow_html=True,
         )
-        columns = st.columns([1, 1, 6])
+        columns = st.columns([1, 1, 1, 5])
         if columns[0].button("Disable" if row["enabled"] else "Enable", key=f"src_toggle_{row['id']}"):
             sources_repo.set_source_enabled(int(row["id"]), not row["enabled"])
             st.rerun()
         if columns[1].button("Test", key=f"src_test_{row['id']}"):
             _test_source(int(row["id"]))
+        source = sources_repo.get_source(int(row["id"]))
+        if source and not source.get("is_builtin"):
+            # Built-in sources can be disabled but not deleted; ones you added can go.
+            if columns[2].button("Delete", key=f"src_del_{row['id']}"):
+                sources_repo.delete_source(int(row["id"]))
+                st.rerun()
 
     section_header("X API")
     if x_status["configured"]:

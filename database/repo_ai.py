@@ -58,11 +58,6 @@ def latest_summary(story_id: int, kind: str) -> Optional[Dict[str, Any]]:
     return data
 
 
-def summaries_for_story(story_id: int) -> List[Dict[str, Any]]:
-    rows = query_all("SELECT * FROM summaries WHERE story_id = ? ORDER BY created_at DESC", (story_id,))
-    return [dict(row) for row in rows]
-
-
 def cache_get(cache_key: str) -> Optional[str]:
     row = query_one("SELECT response FROM ai_cache WHERE cache_key = ?", (cache_key,))
     return row["response"] if row else None

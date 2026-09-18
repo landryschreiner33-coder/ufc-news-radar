@@ -259,10 +259,6 @@ def extract_attributions(text: str, self_outlet: Optional[str] = None) -> List[s
     return found[:4]
 
 
-def category_of(title: str, body: str = "") -> str:
-    return classify_text(title, body).category
-
-
 def is_promotional(title: str, body: str = "") -> bool:
     """Low-information promo content (previews, odds, 'how to watch')."""
     signals = classify_text(title, body)

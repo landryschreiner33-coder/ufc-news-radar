@@ -24,10 +24,6 @@ def hydrate_all(rows: Any) -> List[Dict[str, Any]]:
     return [hydrate(row) for row in rows]  # type: ignore[misc]
 
 
-def article_exists(url: str) -> bool:
-    return query_one("SELECT 1 FROM articles WHERE url_hash = ?", (url_hash(url),)) is not None
-
-
 def get_article(article_id: int) -> Optional[Dict[str, Any]]:
     return hydrate(query_one("SELECT * FROM articles WHERE id = ?", (article_id,)))
 
@@ -95,10 +91,6 @@ def update_article(article_id: int, **fields: Any) -> None:
     execute(f"UPDATE articles SET {assignments} WHERE id = ?", (*updates.values(), article_id))
 
 
-def set_article_story(article_id: int, story_id: Optional[int]) -> None:
-    execute("UPDATE articles SET story_id = ? WHERE id = ?", (story_id, article_id))
-
-
 def recent_articles(hours: int = 72, limit: int = 500, include_demo: bool = True) -> List[Dict[str, Any]]:
     cutoff = hours_ago_iso(hours)
     demo_clause = "" if include_demo else "AND is_demo = 0"
@@ -143,24 +135,9 @@ def search_articles(term: str, limit: int = 50) -> List[Dict[str, Any]]:
     ))
 
 
-def articles_mentioning_fighter(name: str, limit: int = 50) -> List[Dict[str, Any]]:
-    pattern = f'%"{name}"%'
-    return hydrate_all(query_all(
-        "SELECT * FROM articles WHERE fighters LIKE ? ORDER BY COALESCE(published_at, collected_at) DESC "
-        "LIMIT ?",
-        (pattern, limit),
-    ))
-
-
 def article_count(since: Optional[str] = None) -> int:
     if since:
         return int(query_value("SELECT COUNT(*) FROM articles WHERE collected_at >= ?", (since,), 0))
     return int(query_value("SELECT COUNT(*) FROM articles", (), 0))
 
 
-def count_by_source(hours: int = 24) -> Dict[str, int]:
-    rows = query_all(
-        "SELECT source_name, COUNT(*) AS total FROM articles WHERE collected_at >= ? GROUP BY source_name",
-        (hours_ago_iso(hours),),
-    )
-    return {row["source_name"] or "unknown": row["total"] for row in rows}

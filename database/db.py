@@ -140,16 +140,6 @@ def execute(sql: str, params: Sequence[Any] | Dict[str, Any] = ()) -> int:
         return cursor.rowcount if cursor.rowcount > 0 else 0
 
 
-def execute_many(sql: str, rows: Iterable[Sequence[Any]]) -> int:
-    with transaction() as connection:
-        cursor = connection.executemany(sql, list(rows))
-        return cursor.rowcount
-
-
-def row_to_dict(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
-    return dict(row) if row is not None else None
-
-
 def rows_to_dicts(rows: Iterable[sqlite3.Row]) -> List[Dict[str, Any]]:
     return [dict(row) for row in rows]
 

@@ -499,20 +499,6 @@ def _timeline_line(context: StoryContext) -> Optional[str]:
     return f"{first.name} had it first, and {last.name} followed it up after that."
 
 
-def _trim_to_length(script: str, seconds: int) -> str:
-    """Roughly 2.5 spoken words per second, with a little headroom."""
-    max_words = int(seconds * 2.6)
-    words = script.split()
-    if len(words) <= max_words:
-        return script
-    trimmed = " ".join(words[:max_words])
-    for terminator in (".", "!", "?"):
-        position = trimmed.rfind(terminator)
-        if position > len(trimmed) * 0.6:
-            return trimmed[: position + 1]
-    return trimmed + "..."
-
-
 def build_social_post_analysis(post: Dict[str, Any], related: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Describe an X post without inventing the context behind it."""
     related = related or []

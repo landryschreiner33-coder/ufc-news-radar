@@ -108,6 +108,3 @@ def enrich_social_post(post: Dict[str, Any], index: Optional[Any] = None) -> Dic
     return post
 
 
-def enrich_many(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    index = get_fighter_index()
-    return [enrich_article(item, index) for item in items]

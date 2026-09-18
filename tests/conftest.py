@@ -88,6 +88,3 @@ def ingest(make_article):
     return _ingest
 
 
-@pytest.fixture
-def fixtures_dir() -> Path:
-    return Path(__file__).parent / "fixtures"

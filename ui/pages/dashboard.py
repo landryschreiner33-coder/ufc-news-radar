@@ -33,6 +33,14 @@ def render(run_collection_callback) -> None:
     if demo_data_present():
         notice(DEMO_BANNER, kind="demo")
 
+    if counts["total"] == 0:
+        notice(
+            "<b>Nothing collected yet.</b> Press <b>Refresh now</b> to pull the latest UFC news "
+            "from every enabled source - it takes a few seconds. If a source fails, "
+            "<b>Source health</b> shows exactly why. To try the interface without collecting, "
+            "load the clearly-marked demo data from <b>Settings &rarr; Demo data</b>."
+        )
+
     controls = st.columns([1.1, 1.3, 1.3, 1.1, 2.2])
     with controls[0]:
         if st.button("\U0001F504 Refresh now", use_container_width=True, type="primary"):
