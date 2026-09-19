@@ -27,10 +27,11 @@ link, and helps you turn the research into a TikTok without inventing anything.
 8. [Adding monitored X accounts](#adding-monitored-x-accounts)
 9. [Adding news sources](#adding-news-sources)
 10. [Running the tests](#running-the-tests)
-11. [The database](#the-database)
-12. [Updating](#updating)
-13. [Troubleshooting](#troubleshooting)
-14. [What this app will not do](#what-this-app-will-not-do)
+11. [The database, backups and data checks](#the-database)
+12. [Running it online (Streamlit Cloud)](#running-it-online-streamlit-community-cloud)
+13. [Updating](#updating)
+14. [Troubleshooting](#troubleshooting)
+15. [What this app will not do](#what-this-app-will-not-do)
 
 ---
 
@@ -177,17 +178,64 @@ on screen while demo data is loaded. It is never mixed into real news, and
 
 ## Using the dashboard
 
+The menu on the left has four sections you will use constantly:
+
+| Page | What it is for |
+| --- | --- |
+| 📰 **Dashboard** | Everything happening now, grouped by how solid it is |
+| 🐦 **X / Twitter Radar** | Posts grouped by who posted them, badged as signals |
+| 🔎 **Research & Verification** | One story in depth: what is known, claimed, missing |
+| 🎬 **TikTok Studio** | Script on the left, the research backing it on the right |
+
+Under **Reference** and **Tools**: Events, Fighters, Rankings, Fight card
+changes, Watchlists, Search, Source health and Settings.
+
+The dashboard itself is ordered the way you need it:
+
 | Section | What it is for |
 | --- | --- |
 | 🔥 **BREAKING** | High-relevance developments from the last few hours |
 | ⚡ **IMPORTANT** | Ranked by the automated relevance score |
-| 🔴 **RUMORS & REPORTS** | Unconfirmed claims, with who is claiming them |
+| 🔴 **RUMORS & REPORTS** | Unconfirmed claims, showing who claimed it and whether UFC confirmed |
 | ⚡ **DEVELOPING** | Stories still moving - open for the timeline |
 | 📈 **TRENDING** | Unusual *measured* activity, with the evidence listed |
+| 📅 **UPCOMING EVENTS** | With a live countdown to the first bout |
 | 📰 **LATEST** | Everything else, newest first |
 
-Other pages: **Fighters**, **Events**, **Rankings**, **Fight card changes**,
-**X monitoring**, **Watchlists**, **Search**, **Source health**, **Settings**.
+### What the status badges mean
+
+Every story carries an icon **and** the word, never just a colour:
+
+| Badge | Meaning |
+| --- | --- |
+| 🟢 CONFIRMED | Confirmed by UFC or another official party in the collected sources |
+| 🟡 REPORTED | Credible outlets report it; not officially confirmed |
+| 🟠 DEVELOPING | Still moving; details may change |
+| 🔴 RUMOR | Speculative, or a single low-reliability origin |
+| ⚪ UNVERIFIED | Not enough evidence collected yet |
+| 🔵 FIGHTER CLAIM | A fighter, coach or team is the one saying it |
+| 🟣 CONTESTED | Reliable sources disagree. Both versions are shown; the app does not pick one |
+
+### Event status
+
+Events are **never** called finished just because their date passed:
+
+| Status | Meaning |
+| --- | --- |
+| 📅 UPCOMING | The collected start time is still ahead |
+| 🔴 LIVE NOW | Inside the scheduled window |
+| ✅ COMPLETED | Reliable evidence was collected that it finished |
+| 🚫 CANCELLED / ⏸ POSTPONED | Officially, per the collected sources |
+| ⚪ STATUS UNKNOWN | The window has passed but nothing confirms it took place |
+
+That last one is deliberate. The app would rather say "I do not know" than
+tell you a card happened when nothing has confirmed it. If UFC still lists an
+event while a journalist reports a cancellation, the official status stands and
+the report is shown next to it as a **conflict** - you decide.
+
+Each event page separates the **official fight card** (listed by UFC) from
+bouts that are only **reported**, **rumoured** or **cancelled**. A rumoured
+matchup never appears as an official bout.
 
 Two numbers appear on every story. Both are tools, not truth claims:
 
@@ -203,6 +251,10 @@ Two numbers appear on every story. Both are tools, not truth claims:
 All secrets live in the `.env` file in the project folder. They are read from
 the environment only - never written to the database, never shown in the UI,
 never logged. `.env` is in `.gitignore`, so it is not committed.
+
+The lookup order is: a real environment variable, then `.env`, then
+`st.secrets` (which is how Streamlit Community Cloud supplies them). You never
+need more than one of the three.
 
 | Variable | Default | What it does |
 | --- | --- | --- |
@@ -362,6 +414,82 @@ the network.
 * The schema is deliberately PostgreSQL-friendly (ISO-8601 UTC timestamps,
   JSON text columns, no SQLite-only types) so it can be migrated later.
 
+### Backups
+
+**Settings → Database → Backup & restore.** Download gives you one file
+containing everything collected. Restoring validates the file first, and keeps
+your current database alongside the restored one rather than destroying it.
+
+### Checking your data
+
+```bat
+python scripts\validate_production_data.py
+```
+
+Reports duplicate events or fighters, events marked completed before they
+start, predictions treated as results, stories with no sources, impossible or
+future-dated timestamps, ranking problems and official conflicts. Add
+`--check-urls` to test the stored article links too (needs internet, slower).
+
+### Fixing data by hand
+
+**Settings → Data corrections** can merge duplicate events or fighters,
+reassign or recategorise a story, and reclassify a source. These only merge or
+relabel what was collected - they never invent anything - and every change is
+recorded with a reason in the correction history below the form.
+
+---
+
+## Running it online (Streamlit Community Cloud)
+
+Optional - the app is designed to run on your own PC, and that is the setup
+with the fewest surprises. If you do want it online:
+
+1. Push the repository to GitHub.
+2. At <https://share.streamlit.io> create an app pointing at `app.py`.
+3. Put any keys in the app's **Secrets** box (Settings → Secrets), one per
+   line, exactly as they appear in `.env`:
+
+   ```toml
+   ANTHROPIC_API_KEY = "sk-..."
+   X_BEARER_TOKEN = "AAAA..."
+   AI_PROVIDER = "anthropic"
+   ```
+
+   You do **not** need a `.env` file there - the app reads `st.secrets` too.
+
+**Read this before you rely on it.** Streamlit Community Cloud gives an app a
+*temporary* filesystem: it is wiped on every redeploy and whenever the
+container restarts. The app works fine, but the news it collects will not build
+up over time. **Settings → Database → Storage** says so on screen when it
+detects this, rather than letting months of history vanish quietly.
+
+For history that lasts, in order of simplicity:
+
+1. **Run it on your PC** (the default). Nothing to set up.
+2. **Point `UFC_RADAR_DB` at a disk that survives restarts** - a VPS disk or a
+   container volume.
+3. **PostgreSQL.** The schema was written to port cleanly, and `DATABASE_URL`
+   is recognised, but this version has no PostgreSQL driver. If you set that
+   variable, Settings tells you plainly that data is still going to SQLite -
+   the app will not pretend to use a database it cannot reach.
+
+If you deploy anyway, take a backup (Settings → Database) before each redeploy
+and restore it afterwards.
+
+### Collecting without pressing Refresh
+
+The collector runs independently of the dashboard:
+
+```bat
+python scripts\collect.py --loop 20
+```
+
+That collects every 20 minutes for as long as the window is open. For something
+that survives a reboot, use Windows **Task Scheduler** to run
+`scripts\collect.py` every 15-30 minutes. The dashboard reads whatever the
+collector has stored, so the two do not need to run together.
+
 ---
 
 ## Updating
@@ -450,19 +578,26 @@ less, lower them to group more. Changes apply on the next collection run.
 ## Project layout
 
 ```
-app.py              Streamlit entry point + router
-collectors/         source adapters (collect / normalize / validate) + runner
-processors/         entities, categories, similarity, clustering, verification,
-                    support, relevance, trending, developing, fight cards, rankings
+app.py              Streamlit entry point, st.navigation menu
+collectors/         source adapters (collect / normalize / validate) + runner,
+                    UFC events, official fight cards, rankings
+processors/         entities, categories, INTENT/result safety, similarity,
+                    clustering, verification, support, relevance, trending,
+                    developing, fight cards, rankings,
+                    event identity + lifecycle + reconciliation
 social/             X API client, query planning, monitored accounts
 ai/                 provider abstraction, grounded prompts, templates, grounding
-database/           schema, migrations, repositories, seed + demo data
-models/             shared statuses, source types, categories
-ui/                 theme, components, pages
+database/           schema, migrations, repositories, seed + demo data,
+                    persistence (backup/restore), corrections
+models/             shared statuses, event lifecycle, intents, source types
+ui/                 theme, cards, images, nav registry, pages
 utils/              config, HTTP, text/URL, time, logging, paths
 tests/              pytest suite + fixtures
-scripts/collect.py  command-line collection
+scripts/collect.py                   command-line collection
+scripts/validate_production_data.py  data health check
 ```
 
-See `CLAUDE.md` for the architecture and technical decisions, and
-`PROGRESS.md` for the current state and what is left.
+See `CLAUDE.md` for the architecture and technical decisions, `PROGRESS.md`
+for the current state and what is left, and `AUDIT.md` for the faults that were
+found in the previous version, what caused them and how each one is now tested
+against.

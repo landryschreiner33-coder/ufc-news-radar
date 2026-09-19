@@ -45,8 +45,17 @@ These are product requirements, not style preferences. Breaking one is a bug.
 8. **Copyright**: store a short extract (≤1500 chars) for analysis, show a
    short excerpt (~320 chars), always link the original. Never store or display
    a whole article.
-9. **Secrets** come from environment variables only. Never in the database,
-   the UI, logs, or git.
+9. **Secrets** come from the environment only - a real environment variable,
+   `.env`, or `st.secrets` on Streamlit Cloud. Never in the database, the UI,
+   logs, or git.
+10. **A date is not evidence.** An event is never called finished because its
+    date passed. COMPLETED requires reliable evidence that it happened;
+    without it the status is UNKNOWN (`processors/event_lifecycle.py`).
+11. **A preview is not a result.** PREVIEW and PREDICTION articles can never
+    create a winner, a loser or a completed event, whatever words they use
+    (`processors/result_safety.py`).
+12. **An image never implies a claim.** A story with no collected image gets a
+    flat generic graphic, clearly labelled. Never an unrelated fighter photo.
 
 ---
 
@@ -62,7 +71,16 @@ These are product requirements, not style preferences. Breaking one is a bug.
                                       │          │           └ status + reasons
                                       │          └ story grouping (gates against
                                       │            false merges)
-                                      └ entities, category, hedging, attribution
+                                      └ entities, category, INTENT, hedging,
+                                        attribution
+
+ UFC.com ───▶ ufc_events ────▶ canonical identity ──▶ events table
+              ufc_event_card    (event_identity)         │
+              ufc_rankings                               ▼
+                                                  event_lifecycle
+ articles ──▶ event_reconcile ──▶ typed evidence ──▶ UPCOMING / LIVE /
+                                                     COMPLETED / CANCELLED /
+                                                     POSTPONED / UNKNOWN
 ```
 
 Layers, bottom up:
@@ -79,15 +97,19 @@ Layers, bottom up:
   `adapter` column to a class. `runner.py` runs every enabled source and hands
   results to the pipeline.
 * **`processors/`** - the analysis. Entity extraction, rule-based
-  categorisation, TF-IDF/token similarity, clustering, verification, support,
-  relevance, trending, developing timelines, fight-card changes, ranking diffs,
-  and `pipeline.py` which orchestrates them.
+  categorisation, **intent classification (`result_safety.py`)**, TF-IDF/token
+  similarity, clustering, verification, support, relevance, trending,
+  developing timelines, fight-card changes, ranking diffs, **canonical event
+  identity (`event_identity.py`), the event lifecycle (`event_lifecycle.py`)
+  and reconciliation (`event_reconcile.py`)**, and `pipeline.py` which
+  orchestrates them.
 * **`social/`** - X API v2 client (read-only), query planning, monitored
   accounts.
 * **`ai/`** - provider abstraction, grounded context + prompts, template mode,
   grounding checker, and `service.py`, the single API the UI calls.
-* **`ui/`** - theme, components and one module per page. `app.py` is the entry
-  point and router.
+* **`ui/`** - theme, components, `cards.py` (the responsive card grid),
+  `images.py` (image resolution and generic fallbacks), `nav.py` (the page
+  registry) and one module per page. `app.py` builds the `st.navigation` menu.
 
 ---
 
@@ -127,6 +149,37 @@ system label and date off the UFC page and stores them with every snapshot
 (`system_name`, `system_version`). It never assumes a particular ranking
 method. If the page cannot be parsed, it fails loudly instead of guessing.
 
+**Events have one identity and one lifecycle.** `canonical_key` is derived
+from the strongest identifier available (official id > URL slug > numbered
+event > dated Fight Night > matchup > normalised name), sponsor branding is
+stripped, and an `event_aliases` table maps every name an event answers to.
+Status is decided by `event_lifecycle.resolve_event_status` from the official
+schedule plus typed evidence - never from the calendar - and is stored with its
+source, confidence and reasons.
+
+**Weaker evidence never overwrites stronger evidence.** When reporting
+contradicts a live official listing, the official status stands and the report
+is preserved as a conflict (`event_reconcile.py`). Nothing is resolved for the
+user.
+
+**Intent gates results.** Every article is classified PREVIEW / PREDICTION /
+ANNOUNCEMENT / RESULT / POST_FIGHT / INTERVIEW / RUMOR. `may_establish_result`
+is structurally False for PREVIEW and PREDICTION, and a result also needs a
+source trusted to report outcomes.
+
+**Cards are widgets, not links.** Streamlit's page router rewrites in-app
+anchors and drops their query string, and forces absolute URLs into a new tab,
+so a card built as `<a href="?story=12">` silently loses the id. The grid is
+`st.container(horizontal=True, wrap=True)` with a real button per card: it
+reflows 4/3/2/1 like a CSS grid and navigation actually works. Selections are
+also held in session state because `st.switch_page` does not carry query
+parameters across.
+
+**Time is stored in UTC and converted only for display.** `zoneinfo` applies
+the right DST offset per instant. Publication dates that are impossible or in
+the future fall back to collection time at ingest, so a broken feed cannot pin
+an item to the top of the feed.
+
 **X access is assumed to be minimal.** Recent search only (7 days). No
 full-archive assumptions. Hard per-run budgets, a query cache, and rate-limit
 pauses driven by the reset the API reports.
@@ -144,6 +197,9 @@ and the UI shows warnings when they do not.
 ## 5. Commands
 
 ```bash
+# check the collected data for the faults that cause wrong reporting
+python scripts/validate_production_data.py [--check-urls] [--json]
+
 # setup (Windows)
 py -m venv .venv && .venv\Scripts\activate && pip install -r requirements.txt
 copy .env.example .env
@@ -166,7 +222,8 @@ python -m pytest tests/test_verification.py -v
 `AI_PROVIDER`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `OPENAI_API_KEY`,
 `OPENAI_MODEL`, `OPENAI_BASE_URL`, `AI_MAX_CONTEXT_CHARS`, `X_BEARER_TOKEN`,
 `X_MAX_SEARCHES_PER_RUN`, `X_MAX_TIMELINES_PER_RUN`, `X_MAX_RESULTS_PER_QUERY`,
-`X_QUERY_CACHE_MINUTES`, `UFC_RADAR_DB`, `HTTP_TIMEOUT_SECONDS`,
+`X_QUERY_CACHE_MINUTES`, `UFC_RADAR_DB`, `DATABASE_URL` (recognised, reported, not implemented),
+`HTTP_TIMEOUT_SECONDS`,
 `HTTP_USER_AGENT`, `UFC_RADAR_DEBUG`. See `.env.example` for descriptions.
 
 User *preferences* (thresholds, enabled sources, watchlists, monitored
@@ -233,13 +290,25 @@ never in `.env`.
 ## 10. Current state
 
 All specified subsystems are implemented and tested: collection, story
-grouping, verification, rumour handling, developing timelines, trending,
-relevance, fight-card changes, rankings + change detection, X integration
-(disabled without a token), the AI layer with template fallback, the full
-dashboard with research mode, check-before-reporting and TikTok tools,
-watchlists, search, filters, source health, settings and demo mode.
+grouping, verification (7 statuses), rumour handling, developing timelines,
+trending, relevance, fight-card changes (official vs reported), rankings +
+change detection, canonical event identity, the event lifecycle and
+reconciliation, result safety, X integration (disabled without a token), the AI
+layer with template fallback, the full dashboard with research mode, TikTok
+Studio, check-before-reporting, watchlists, search, filters, source health,
+settings, backups, data corrections and demo mode.
 
-171 pytest tests pass (also verified from a clean virtual environment). The dashboard was driven end-to-end in Chromium: every
-page renders, navigation and tabs work, and the browser console is clean.
+**283 pytest tests pass.** `scripts/validate_production_data.py` reports 0
+errors and 0 warnings. The app was driven end to end in Chromium: all 12 pages
+render with no exceptions and no console errors, and the card grid was measured
+reflowing 4 → 3 → 2 → 1 columns between 1800px and 430px with no horizontal
+overflow.
 
-See `PROGRESS.md` for the detailed status, bugs fixed and next steps.
+A fresh-database acceptance run against the recorded fixtures produced
+`10/14 sources OK` with the four failures isolated, statuses CONFIRMED /
+REPORTED / CONTESTED / RUMOR, two events both UPCOMING with their reasons and
+no duplicates, rankings under "Meta UFC Rankings", and official bouts with
+card changes recorded.
+
+See `AUDIT.md` for the faults found in the previous version and `PROGRESS.md`
+for the detailed status.

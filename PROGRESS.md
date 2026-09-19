@@ -2,190 +2,133 @@
 
 Living status of UFC News Radar. Updated as work lands.
 
-**Last updated:** 2026-09-18
-**Test status:** ✅ 171 passed (`python -m pytest`)
-**App status:** ✅ starts and runs; every page verified in Chromium, console clean
+**Last updated:** 2026-09-19
+**Test status:** ✅ 283 passed (`python -m pytest`)
+**Data status:** ✅ `python scripts/validate_production_data.py` - 0 errors, 0 warnings
+**App status:** ✅ all 12 pages driven in Chromium; no exceptions, no console errors
 
 ---
 
-## 1. Completed functionality
+## 1. The production overhaul (this round)
+
+Three faults were reproduced in the *live* database - none of them visible to
+the old test suite, because those tests only ever saw freshly built fixtures.
+`AUDIT.md` has the full write-up; the summary:
+
+| # | Fault | Fix | Tests |
+| --- | --- | --- | --- |
+| 1 | Events shown as finished once their date passed (the UFC 331 report). There was no lifecycle at all - the only date logic was an upcoming-list filter comparing `event_date` with today | `processors/event_lifecycle.py`: UPCOMING / LIVE / COMPLETED / CANCELLED / POSTPONED / UNKNOWN from the official schedule plus evidence. Past its window with no reliable evidence stays **UNKNOWN** | `test_event_lifecycle.py` |
+| 2 | One event stored as several rows (`UFC 320` and `UFC 320: Jones vs Aspinall` were separate) because identity was the display name | `processors/event_identity.py` canonical keys + `event_aliases` + a merge migration that keeps the old id as a redirect | `test_event_lifecycle.py` |
+| 3 | Prediction/preview articles could become fight results, and so complete events that had not happened | `processors/result_safety.py`: intent classification where `may_establish_result` is structurally False for PREVIEW/PREDICTION | `test_result_safety.py` |
+
+### Also delivered
+
+- [x] **CONTESTED status** (🟣) when reliable sources on both sides contradict
+      each other. Two low-quality accounts disagreeing does not qualify.
+- [x] **Event reconciliation** - reporting never overwrites a live official
+      listing; the disagreement is shown as a conflict instead.
+- [x] **Official fight cards** from UFC's own event page, with bouts marked
+      `official` and kept visually separate from reported and rumoured ones.
+- [x] **Official schedule data**: segment start timestamps, broadcast timezone,
+      venue city, official event id, event image.
+- [x] **Time correctness**: UTC storage, `zoneinfo` display with DST applied
+      per instant, future timestamps shown as "in 3h", and impossible or
+      future publication dates falling back to collection time at ingest.
+- [x] **Navigation** rebuilt on `st.Page` / `st.navigation`: Dashboard,
+      X Radar, Research, TikTok Studio, with Reference and Tools secondary.
+- [x] **Responsive card grid** - measured 4 cards per row at 1800px, 3 at 1400,
+      2 at 1100, 1 at 800 and 430, with no horizontal overflow.
+- [x] **Story images** with honest fallbacks (generic category graphics, never
+      an unrelated fighter photo).
+- [x] **TikTok Studio** page: script left, the research backing it right.
+- [x] **X Radar** grouped into Breaking signals / Journalists / Fighter posts /
+      Rumors / Trending discussions, every post badged as a social signal.
+- [x] **Streamlit Cloud support**: `st.secrets` read alongside env and `.env`.
+- [x] **Backup and restore** via SQLite's backup API, with validation.
+- [x] **Storage honesty**: the Settings page says plainly when the filesystem
+      is temporary and history will not accumulate.
+- [x] **Data corrections** with a recorded history (merge events/fighters,
+      reassign, recategorise, reclassify a source).
+- [x] **`scripts/validate_production_data.py`** - 11 checks plus optional URL
+      testing; verified it catches injected faults and exits 1.
+
+---
+
+## 2. Completed functionality (cumulative)
 
 ### Foundation
 - [x] Project structure (`collectors/ processors/ social/ ai/ database/ models/ ui/ utils/ tests/ scripts/`)
-- [x] Config from environment only, `.env.example`, secrets never stored or logged
+- [x] Config from the environment only (env var → `.env` → `st.secrets`), `.env.example`
 - [x] Resilient HTTP client: timeouts, retries with backoff, 429 handling, conditional GETs
-- [x] Text/URL normalisation, UTC time handling, logging
+- [x] Text/URL normalisation, UTC time handling with timezone display, logging
 
 ### Database
-- [x] SQLite schema with every specified table: `sources, articles, stories,
-      story_sources, story_updates, social_posts, story_social_posts, fighters,
-      events, fight_card_items, fight_card_changes, rankings, ranking_changes,
-      summaries, watchlists, settings, source_classifications,
-      monitored_social_accounts, collection_runs, x_query_cache, ai_cache,
-      migrations`
-- [x] Indexes on every lookup/sort column; consistent ISO-8601 UTC timestamps
-- [x] Migration mechanism (`user_version` + `MIGRATIONS`), PostgreSQL-friendly types
+- [x] Schema v4 with every specified table plus `event_aliases` and `data_corrections`
+- [x] Indexes on every lookup/sort column; ISO-8601 UTC timestamps throughout
+- [x] Migrations (`user_version` + `MIGRATIONS`), verified idempotent and
+      verified by upgrading a copy of the live v2 database with no data loss
+- [x] Canonical event identity with automatic duplicate merging on start-up
 - [x] Repositories split per domain area; idempotent seeding
 
 ### Collection
-- [x] `collect() / normalize() / validate()` adapter interface with per-source failure isolation
+- [x] `collect() / normalize() / validate()` adapter interface, per-source failure isolation
 - [x] RSS adapter with fallback URLs and last-known-good tracking
-- [x] 14 built-in sources (UFC.com, ESPN, MMA Fighting, MMA Junkie, Sherdog,
-      Google News ×2, MMA Mania, Bloody Elbow, Fightful, BJPenn, LowKick,
-      The Mac Life, Reddit r/MMA) - all user-editable, new ones addable in the UI
+- [x] 14 built-in sources, all user-editable
 - [x] Aggregator items re-attributed to the real publisher
-- [x] UFC.com rankings adapter (reads the published system label; generic fallback parser)
-- [x] UFC.com events adapter
-- [x] Short-extract article text fetch (capped per run, never full articles)
-- [x] Source health: status, last success, last error + kind, counts, resolved URL
-- [x] Collection run history; CLI collector (`scripts/collect.py`)
+- [x] UFC.com rankings (reads the published system label), events, and official cards
+- [x] Publication dates sanitised at ingest
+- [x] Source health, collection run history, CLI collector (`scripts/collect.py`)
 
 ### Processing
 - [x] Fighter/event/matchup/weight-class extraction with ambiguity guards
-- [x] Rule-based categorisation + hedging, official-language, attribution and denial signals
-- [x] URL duplicate detection, TF-IDF + token similarity, story clustering with
-      gates against false grouping, denial-joins-its-story exception
-- [x] Verification engine: 6 statuses with reasons; independence accounting;
-      derivative detection; conflict preservation
+- [x] Rule-based categorisation, **intent classification**, hedging, attribution, denial
+- [x] Clustering with gates against false grouping; denial-joins-its-story exception
+- [x] Verification: 7 statuses with reasons; independence accounting; conflict preservation
 - [x] Automated source-support assessment (explicitly not a probability)
-- [x] Relevance scoring with a visible per-component breakdown
-- [x] Trending from measured activity only, with evidence listed
-- [x] Developing stories: chronological timelines, status-change entries, dedupe
-- [x] Fight-card tracking: new fight, cancellation, replacement, opponent change,
-      main/co-main change, title-fight change, weight-class change - each with
-      before/after/reason/status/source/timestamp, logged once per change
-- [x] Ranking snapshots + change detection (up, down, new entry, exit, champion changes)
-
-### X / Twitter
-- [x] Official API v2 read endpoints only (recent search 7 days, user lookup, timelines)
-- [x] Graceful "NOT CONFIGURED" state; nothing simulated, no scraping
-- [x] Per-run budgets, query caching, rate-limit pauses using the API's reset time
-- [x] Monitored account list with editable account types; classification drives weight
-- [x] Posts treated as signals: linked to stories only on real overlap
-
-### AI
-- [x] Provider abstraction (Anthropic, OpenAI-compatible, none) selected by env var
-- [x] Grounded context + prompts built only from collected sources
-- [x] Template mode that fully works with no API key
-- [x] Grounding checker for quotes and figures
-- [x] Content-fingerprint caching of all generated text
-- [x] Full service API: `summarize_story, classify_story, detect_duplicates,
-      group_story, assess_source_support, detect_rumor, calculate_relevance,
-      identify_fighters, identify_event, analyze_social_post,
-      generate_reporting_check, generate_tiktok_script, generate_tiktok_hooks,
-      generate_story_angle, generate_questions`
+- [x] Relevance with a visible breakdown; trending from measured activity only
+- [x] Developing timelines, fight-card change tracking, ranking snapshots and diffs
+- [x] Event lifecycle + reconciliation on every collection
 
 ### Interface
-- [x] Dark dashboard: header metrics + 🔥 BREAKING, ⚡ IMPORTANT,
-      🔴 RUMORS & REPORTS, ⚡ DEVELOPING, 📈 TRENDING, 📰 LATEST
-- [x] Story cards with status, summary, sources, independence, fighters, event,
-      category, relevance bar, X activity, READ MORE
-- [x] Research mode with all specified sections + source-support panel,
-      status explanation and relevance breakdown
-- [x] CHECK BEFORE REPORTING on every story
-- [x] TikTok tools: 30s/60s scripts, hooks, key facts, angle, questions, sources used
-- [x] Fighter, event, rankings, fight-card-change, X monitoring, watchlists,
-      search, source health and settings pages
-- [x] 14 filters, 5 sort orders, minimum-relevance threshold, feed search
-- [x] Demo mode: fictional, labelled, one-click load/remove
+- [x] Four primary sections, eight secondary, built on the current navigation API
+- [x] Responsive card grid; status badges with icon **and** word (never colour alone)
+- [x] Dashboard sections: 🔥 BREAKING, ⚡ IMPORTANT, 🔴 RUMORS, ⚡ DEVELOPING,
+      📈 TRENDING, 📅 UPCOMING EVENTS, 📰 LATEST
+- [x] Event pages with lifecycle, countdown, and official/reported/rumored/cancelled split
+- [x] Research mode with all specified sections; CHECK BEFORE REPORTING
+- [x] TikTok Studio; fighter, rankings, card-change, X, watchlist, search,
+      source-health and settings pages
+- [x] 14 filters, 5 sort orders, polished first-run empty state, demo mode
 
 ### Quality
-- [x] 171 tests across database, collectors, failures, normalisation, dedupe,
-      clustering, entities, classification, rumours, status transitions,
-      relevance/support/trending, rankings, X responses, malformed data,
-      developing updates, watchlists, fight cards, filters/sorting, demo data
-      and the AI layer
-- [x] Verified from a clean virtual environment built only from requirements.txt
-- [x] Dead code removed (22 unused helpers); the three that filled real gaps
-      were wired up instead (delete a source you added, measured X engagement on
-      a story, clear the AI cache)
-- [x] Whole app driven in Chromium (every page, tabs, navigation, forms)
-- [x] README (Windows-exact), CLAUDE.md, PROGRESS.md, .env.example
+- [x] 283 tests
+- [x] Production data validator
+- [x] Whole app driven in Chromium at four viewport widths
 
 ---
 
-## 2. Blocked features (need something outside the app)
+## 3. Blocked features (need something outside the app)
 
 | Feature | Blocked by | State |
 | --- | --- | --- |
-| X monitoring (search, timelines, engagement) | `X_BEARER_TOKEN` from an X developer account | Integration built and tested against recorded API responses; shows **X MONITORING - NOT CONFIGURED** until a token exists. Setup steps in README. |
-| AI-written summaries/scripts | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` | Providers implemented; app runs in labelled template mode meanwhile. Setup steps in README. |
-| Live feed verification | The build sandbox had no outbound internet (egress policy blocked every news domain) | All collection/parsing/failure paths are tested against recorded fixtures. The first live run happens on your machine; Source health reports exactly what each source does. |
+| X monitoring | `X_BEARER_TOKEN` from an X developer account | Integration built and tested against recorded API responses; shows **X MONITORING - NOT CONFIGURED** until a token exists. |
+| AI-written summaries/scripts | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` | Providers implemented; app runs in labelled template mode meanwhile. |
+| Live feed verification | The build sandbox has no outbound internet (egress policy blocks every news domain; confirmed again this round - all 14 sources returned connection errors, each isolated, the run completed cleanly) | Collection, parsing and failure handling are tested against recorded fixtures. The first live run happens on your machine; Source health reports exactly what each source did. |
+| PostgreSQL storage | A driver and a database | The schema is PostgreSQL-friendly and `DATABASE_URL` is recognised, but no driver is implemented. The app *says so* rather than half-working. |
 
 ---
 
-## 3. Known bugs
+## 4. Known bugs
 
 None outstanding.
 
-Fixed during the build (all now covered by tests):
-
-- `canonical_url` treated `http://` and `https://` copies of one article as
-  different articles, and turned non-URL strings into `https:///...`.
-- `execute()` returned a stale `lastrowid` for `INSERT OR IGNORE` statements
-  that inserted nothing, so repeat ranking snapshots reported phantom writes.
-- A story could reach DEVELOPING with no credible source behind it, which let
-  low-quality accounts repeating each other lift a rumour.
-- "Jones vs. Aspinall" headlines produced no matchup, because a bare surname
-  never resolved even with a known fighter on the other side.
-- Fight-card changes were logged once per reporting outlet instead of once per
-  change.
-- A denial ("X denies he is out") started its own story instead of joining the
-  report it disputes.
-- Template scripts repeated the headline twice and could lose their closing
-  line to length trimming.
-
 ---
 
-## 4. Test status
+## 5. Next steps
 
-```
-python -m pytest        ->  171 passed
-```
-
-| Area | File |
-| --- | --- |
-| Database, settings, source health | `tests/test_database.py` |
-| Collectors, fallbacks, failures, malformed feeds | `tests/test_collectors.py` |
-| URL/title/time normalisation, extraction limits | `tests/test_normalization.py` |
-| Fighter/event/matchup matching | `tests/test_entities.py` |
-| Categories, hedging, attribution, denials | `tests/test_categorize.py` |
-| Duplicates and story grouping | `tests/test_clustering.py` |
-| Statuses, independence, conflicts, transitions | `tests/test_verification.py` |
-| Relevance, support, trending | `tests/test_scoring.py` |
-| Ranking snapshots and changes | `tests/test_rankings.py` |
-| X API responses, rate limits, quota rules | `tests/test_x_api.py` |
-| End-to-end pipeline, idempotency, malformed data | `tests/test_pipeline.py` |
-| AI templates, grounding, caching, fallback | `tests/test_ai.py` |
-| Watchlists, classifications, accounts, demo data | `tests/test_watchlists_settings.py` |
-| Fight-card detection and change log | `tests/test_fight_cards.py` |
-| Developing stories and timelines | `tests/test_developing.py` |
-| Feed filters and sort orders | `tests/test_filters.py` |
-
----
-
-## 5. Remaining / next work
-
-Nothing in the specification is unimplemented. Sensible next steps:
-
-1. **Run it live on Windows** and check Source health - confirm each feed URL
-   and fix any that moved (editable in Settings).
-2. **Add your X token** if you want X monitoring, then tune the monitored
-   account list to the reporters you actually trust.
-3. **Add an AI key** if you want model-written scripts instead of template mode.
-4. **Automatic collection**: Windows Task Scheduler running
-   `python scripts/collect.py` on a schedule.
-5. Possible later work (not specified, not started):
-   - PostgreSQL migration (schema is already compatible)
-   - push/desktop notifications for watchlist hits
-   - per-source article-count charts over time
-   - export a research page to PDF/markdown for offline scripting
-
----
-
-## 6. Working agreements
-
-- Update this file whenever a subsystem lands or a bug is found/fixed.
-- Add a test with every bug fix.
-- Never weaken a verification rule to make a test pass.
-- Keep `CLAUDE.md` in step with architectural decisions.
+- Run a real collection on a machine with internet and check Source health;
+  feed URLs drift and each source carries fallbacks.
+- Schedule `python scripts/collect.py --loop 20` (or Task Scheduler on Windows)
+  if you want collection without pressing Refresh.
+- If you deploy to Streamlit Cloud, read the storage note in Settings first:
+  that filesystem is temporary, so take a backup before each redeploy.

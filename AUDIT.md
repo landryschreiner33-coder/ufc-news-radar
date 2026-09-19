@@ -188,3 +188,77 @@ New table `event_aliases`.
 
 The migration is idempotent and was verified both on a fresh database and by
 upgrading a copy of the live v2 database with no data loss.
+
+---
+
+## Issue 5 - Card links could not carry a story id
+
+**Severity:** high once the UI was rebuilt around cards - every card was dead.
+
+**Reproduction:** story cards were rendered as `<a href="?story=12">`. Clicking
+one landed on the right page with **no** query parameters, so the app showed
+the story picker instead of the story.
+
+**Root cause:** Streamlit's page router rewrites in-app anchors. A relative
+link whose path matches one of its pages is turned into an internal page
+navigation and the query string is discarded; an absolute URL is left intact
+but forced to `target="_blank"`, opening a new tab. Neither can carry an id.
+
+A second, self-inflicted problem made this hard to see: a stale Streamlit
+process kept holding port 8501 after `kill`, so several rounds of "fixes" were
+tested against old code. The restart helper now kills by port owner and asserts
+that the log contains no "Port 8501 is not available".
+
+**Fix:** cards are built with `st.container(horizontal=True, wrap=True)` and a
+real `st.button` per card. That keeps the responsive reflow (measured 4/3/2/1
+across 1800→430px) and makes navigation work. Because `st.switch_page` does not
+carry query parameters either, the selection is also held in session state,
+with the URL parameter kept so a story stays linkable.
+
+**Verification:** driven in Chromium - READ MORE opens the story's research
+page, OPEN EVENT opens the event with its status and card, and a menu click
+away no longer bounces back to the previous item.
+
+---
+
+## Issue 6 - Smaller faults found and fixed
+
+| Fault | Where | Fix |
+| --- | --- | --- |
+| The new navigation menu was invisible | `ui/theme.py` had `div[data-testid="stSidebarNav"] { display: none; }` from the old query-param router | Rule removed and restyled |
+| Rankings table crashed Arrow | `#` column mixed `"C"` (champion) with integer positions | Column cast to text |
+| Duplicate widget key `global_search` | the sidebar and the Search page both used it | Sidebar renamed to `sidebar_search` |
+| Deprecated width API | 18 `use_container_width=True` calls | Migrated to `width="stretch"` |
+| A future timestamp read as "just now" | `utils/timeutil.humanize_age` | Now reads "in 3h"; feed dates that are impossible or in the future fall back to collection time at ingest |
+
+---
+
+## Verification performed
+
+* **283 tests pass**, including every regression listed above.
+* **Production data validation**: 0 errors, 0 warnings on the live database;
+  separately verified that it *does* report injected faults (duplicate
+  fighters, an event completed before it starts, a prediction categorised as a
+  result, a story with no sources, a future-dated article) and exits 1.
+* **Full acceptance run on a fresh database** against recorded fixtures:
+  empty first run shows no invented news; 10/14 sources OK with 4 failures
+  isolated; statuses CONFIRMED / REPORTED / CONTESTED / RUMOR all produced;
+  both events UPCOMING with reasons and no duplicates; rankings stored under
+  "Meta UFC Rankings"; official bouts and card changes recorded; X and AI
+  correctly reporting their unconfigured states.
+* **UFC 331 case, end to end**: day-of before start → UPCOMING; during the card
+  → LIVE; after the window with no evidence → UNKNOWN; with reliable evidence →
+  COMPLETED. All three spellings resolve to `ufc:331`.
+* **Browser**: all 12 pages at 1500px with no exceptions and no console errors;
+  grid reflow measured at 1800 / 1400 / 1100 / 800 / 430px with no horizontal
+  overflow.
+* **Migration safety**: schema v2 → v4 applied to a copy of the live database
+  with all 17 articles preserved and the duplicate event merged.
+
+## Limitation of this audit
+
+The sandbox has no outbound internet access. Every news domain returned a
+connection error, which confirmed that per-source failure isolation works but
+means **no live source URL was verified**. Parsing is tested against recorded
+fixtures only. The first real collection happens on the user's machine, and
+Source health reports exactly what each source did.
