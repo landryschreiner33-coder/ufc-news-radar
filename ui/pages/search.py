@@ -8,6 +8,7 @@ from database import repo_entities as entities_repo
 from database import repo_settings as settings_repo
 from database import repo_social as social_repo
 from database import repo_stories as stories_repo
+from ui import nav
 from ui.components import metric_row, navigate, page_header, section_header, story_grid
 from utils.textutil import truncate
 from utils.timeutil import format_display
@@ -54,18 +55,18 @@ def render() -> None:
             )
             if article.get("story_id") and st.button("Open the story",
                                                      key=f"search_art_{article['id']}"):
-                navigate("research", story=article["story_id"])
+                nav.open_story(int(article["story_id"]))
     with tabs[2]:
         for fighter in fighters:
             if st.button(f"{fighter['name']} ({fighter.get('mention_count') or 0} mentions)",
                          key=f"search_fighter_{fighter['id']}"):
-                navigate("fighter", name=fighter["name"])
+                nav.open_fighter(fighter["name"])
         if not fighters:
             st.markdown('<div class="muted">No fighters matched.</div>', unsafe_allow_html=True)
     with tabs[3]:
         for event in events:
             if st.button(f"{event['name']}", key=f"search_event_{event['id']}"):
-                navigate("event", event_id=event["id"])
+                nav.open_event(int(event["id"]))
         if not events:
             st.markdown('<div class="muted">No events matched.</div>', unsafe_allow_html=True)
     with tabs[4]:

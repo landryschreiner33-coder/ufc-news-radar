@@ -1,7 +1,19 @@
 """Application configuration.
 
-Secrets come from environment variables / the .env file ONLY.  User
-preferences (refresh interval, thresholds, watchlists...) live in the
+Secrets come from the environment ONLY - never the database, the UI or git.
+Two environments are supported and the lookup order is the same in both:
+
+    1. a real environment variable   (works everywhere)
+    2. ``.env``                      (local development)
+    3. ``st.secrets``                (Streamlit Community Cloud)
+
+Streamlit Cloud has no ``.env`` file, so secrets are pasted into the app's
+Secrets box instead; reading ``st.secrets`` here is what makes the deployed
+app work without changing any calling code. The reverse is also true: nothing
+breaks locally when Streamlit is not running, because the lookup is wrapped
+and falls through silently.
+
+User *preferences* (thresholds, enabled sources, watchlists) live in the
 ``settings`` table so they can be edited from the UI - see
 ``database.repositories.settings_repo``.
 
@@ -26,14 +38,45 @@ def load_env(force: bool = False) -> None:
     global _ENV_LOADED
     if _ENV_LOADED and not force:
         return
+    # Missing .env is the normal case in the cloud, and load_dotenv treats it
+    # as a no-op, so there is nothing to handle here.
     load_dotenv(PROJECT_ROOT / ".env", override=False)
     _ENV_LOADED = True
 
 
+def _from_streamlit_secrets(name: str) -> Optional[str]:
+    """Read one key from ``st.secrets`` if we are running under Streamlit.
+
+    Deliberately defensive: importing streamlit outside a Streamlit process, or
+    touching ``st.secrets`` with no secrets file, raises - and configuration
+    must never be the thing that crashes the app or the test suite.
+    """
+    try:
+        import streamlit as st
+
+        value = st.secrets.get(name)  # type: ignore[union-attr]
+        if value is None:
+            # Streamlit also supports [section] grouping; check one level down.
+            for section in ("ufc_news_radar", "general", "secrets"):
+                group = st.secrets.get(section)  # type: ignore[union-attr]
+                if isinstance(group, dict) and name in group:
+                    value = group[name]
+                    break
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+    except Exception:
+        return None
+
+
 def _env(name: str, default: str = "") -> str:
+    """Environment variable, then .env, then Streamlit Cloud secrets."""
     load_env()
     value = os.getenv(name)
-    return default if value is None or value == "" else value.strip()
+    if value is None or value == "":
+        value = _from_streamlit_secrets(name)
+    return default if value is None or value == "" else str(value).strip()
 
 
 def _env_int(name: str, default: int) -> int:

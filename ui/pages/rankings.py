@@ -5,6 +5,7 @@ import streamlit as st
 
 from database import repo_rankings as rankings_repo
 from processors.rankings_diff import describe_change
+from ui import nav
 from ui.components import bullet_list, metric_row, navigate, page_header, section_header
 from utils.timeutil import format_display
 
@@ -51,18 +52,18 @@ def render() -> None:
 
         frame = pd.DataFrame([
             {
-                "#": "C" if row.get("is_champion") else row.get("position"),
+                "#": "C" if row.get("is_champion") else str(row.get("position") or ""),
                 "Fighter": row.get("fighter_name"),
                 "Ranking date": row.get("ranking_date"),
                 "System": row.get("system_name"),
             }
             for row in rows
         ])
-        st.dataframe(frame, use_container_width=True, hide_index=True)
+        st.dataframe(frame, width="stretch", hide_index=True)
         picker = st.selectbox("Open a fighter page", ["-"] + [row["fighter_name"] for row in rows],
                               key="rank_fighter_pick")
         if picker != "-":
-            navigate("fighter", name=picker)
+            nav.open_fighter(picker)
     else:
         st.markdown('<div class="muted">No rows for this division.</div>', unsafe_allow_html=True)
 
@@ -93,4 +94,4 @@ def _render_changes() -> None:
         }
         for change in changes
     ])
-    st.dataframe(frame, use_container_width=True, hide_index=True)
+    st.dataframe(frame, width="stretch", hide_index=True)

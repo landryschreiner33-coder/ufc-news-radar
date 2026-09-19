@@ -8,6 +8,7 @@ import streamlit as st
 from database import repo_settings as settings_repo
 from database import repo_stories as stories_repo
 from social import accounts as accounts_mod
+from ui import nav
 from ui.components import metric_row, navigate, page_header, section_header, story_grid
 from utils.textutil import normalize_text
 
@@ -61,7 +62,7 @@ def render() -> None:
             unsafe_allow_html=True,
         )
     if st.button("Manage X accounts →"):
-        navigate("social")
+        nav.go("x_radar")
 
 
 def _watchlist_stories() -> List[Dict[str, Any]]:

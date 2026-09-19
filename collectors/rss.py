@@ -24,7 +24,7 @@ from utils.textutil import (
     normalize_text,
     strip_html,
 )
-from utils.timeutil import struct_time_to_iso, utcnow_iso
+from utils.timeutil import parse_iso, sanitize_published_at, struct_time_to_iso, to_iso, utcnow_iso
 
 logger = get_logger(__name__)
 
@@ -103,6 +103,7 @@ class RSSCollector(BaseCollector):
             if isinstance(tag, dict) and tag.get("term")
         ]
 
+        collected = utcnow_iso()
         item: Dict[str, Any] = {
             "source_id": self.source.get("id"),
             "source_key": self.source.get("key"),
@@ -112,7 +113,11 @@ class RSSCollector(BaseCollector):
             "domain": domain_of(canonical_url(link)),
             "title": title,
             "author": author,
-            "published_at": published or utcnow_iso(),
+            # A feed date in the future would pin the item to the top of the
+            # feed forever; one from 1970 would make it look ancient. Both
+            # fall back to when we actually collected it.
+            "published_at": sanitize_published_at(published, collected) or collected,
+            "updated_at_source": _updated_at(entry),
             "excerpt": excerpt_from(summary_text, 320),
             "content_snippet": summary_text[:1200] if summary_text else "",
             "content_chars": len(summary_text or ""),
@@ -123,7 +128,7 @@ class RSSCollector(BaseCollector):
             "reliability_weight": self.source.get("reliability_weight"),
             "independence_group": self.source.get("independence_group"),
             "is_official": normalize_source_type(self.source.get("source_type")) == SourceType.OFFICIAL.value,
-            "collected_at": utcnow_iso(),
+            "collected_at": collected,
         }
         if self.source.get("independence_group") in AGGREGATOR_GROUPS:
             _apply_publisher(item, entry)
@@ -206,3 +211,22 @@ def _apply_publisher(item: Dict[str, Any], entry: Any) -> None:
         # Unknown publishers are independent of each other, so group by domain.
         item["independence_group"] = item.get("domain") or "aggregator"
         item["is_official"] = False
+
+
+def _updated_at(entry: Any) -> Optional[str]:
+    """The publisher's own 'last updated' stamp, kept separate from published_at.
+
+    An outlet quietly rewriting a story is itself a signal, so the two dates are
+    never collapsed into one.
+    """
+    for key in ("updated_parsed", "modified_parsed"):
+        value = entry.get(key)
+        if value:
+            return struct_time_to_iso(value)
+    for key in ("updated", "modified"):
+        value = entry.get(key)
+        if value:
+            parsed = parse_iso(value)
+            if parsed:
+                return to_iso(parsed)
+    return None

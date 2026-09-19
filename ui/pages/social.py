@@ -175,4 +175,4 @@ def _render_usage(status) -> None:
         }
         for row in rows
     ])
-    st.dataframe(frame, use_container_width=True, hide_index=True)
+    st.dataframe(frame, width="stretch", hide_index=True)

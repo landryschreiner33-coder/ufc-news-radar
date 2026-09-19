@@ -127,7 +127,7 @@ def _render_runs() -> None:
         }
         for run in runs
     ])
-    st.dataframe(frame, use_container_width=True, hide_index=True)
+    st.dataframe(frame, width="stretch", hide_index=True)
 
 
 def _render_add_source() -> None:

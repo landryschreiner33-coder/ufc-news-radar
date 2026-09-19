@@ -1,53 +1,49 @@
-"""Main dashboard: what is happening right now, organised for fast scanning."""
+"""Main dashboard: what is happening right now, organised for fast scanning.
+
+Layout: a compact status bar, then the sections in the order a creator needs
+them - BREAKING, IMPORTANT, RUMORS, DEVELOPING, TRENDING, UPCOMING EVENTS,
+LATEST. Each section is a responsive card grid rather than a wall of text.
+"""
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import streamlit as st
 
+from ai import service as ai_service
+from database import repo_entities as entities_repo
 from database import repo_settings as settings_repo
 from database import repo_stories as stories_repo
 from database.demo_data import DEMO_BANNER, demo_data_present
+from models.types import EventStatus, event_status_style
+from processors.event_lifecycle import format_countdown
+from social.x_monitor import x_status_panel
 from ui import filters as filter_mod
-from ui.components import metric_row, notice, page_header, section_header, story_grid
-from utils.timeutil import humanize_age
+from ui.cards import card_grid, esc
+from ui.components import notice, page_header, section_header
+from utils.timeutil import format_display, humanize_age
 
 
 def render(run_collection_callback) -> None:
     page_header("UFC NEWS <span>RADAR</span>",
                 "What is happening now - and what is actually known.")
 
-    last_collection = settings_repo.get_setting("last_collection_at", "")
     counts = stories_repo.dashboard_counts()
-    metric_row([
-        ("Last Updated", humanize_age(last_collection) if last_collection else "never"),
-        ("New Stories", counts["new"]),
-        ("Breaking", counts["breaking"], counts["breaking"] > 0),
-        ("Important", counts["important"]),
-        ("Rumors", counts["rumors"]),
-        ("Developing", counts["developing"]),
-        ("Trending", counts["trending"]),
-        ("Confirmed", counts["confirmed"]),
-    ])
+    _status_bar(counts)
 
     if demo_data_present():
         notice(DEMO_BANNER, kind="demo")
 
     if counts["total"] == 0:
-        notice(
-            "<b>Nothing collected yet.</b> Press <b>Refresh now</b> to pull the latest UFC news "
-            "from every enabled source - it takes a few seconds. If a source fails, "
-            "<b>Source health</b> shows exactly why. To try the interface without collecting, "
-            "load the clearly-marked demo data from <b>Settings &rarr; Demo data</b>."
-        )
+        _empty_state(run_collection_callback)
+        return
 
     controls = st.columns([1.1, 1.3, 1.3, 1.1, 2.2])
     with controls[0]:
-        if st.button("\U0001F504 Refresh now", use_container_width=True, type="primary"):
+        if st.button("\U0001F504 Refresh now", width="stretch", type="primary"):
             run_collection_callback()
     with controls[1]:
-        feed_filter = st.selectbox("Filter", filter_mod.filter_options(),
-                                   index=0, key="dash_filter")
+        feed_filter = st.selectbox("Filter", filter_mod.filter_options(), index=0, key="dash_filter")
     with controls[2]:
         default_sort = settings_repo.get_setting("default_sort", "Newest")
         sort_choices = filter_mod.sort_options()
@@ -57,8 +53,7 @@ def render(run_collection_callback) -> None:
     with controls[3]:
         min_relevance = st.number_input(
             "Min relevance", min_value=0, max_value=100,
-            value=int(settings_repo.get_int("min_relevance", 0)), step=5, key="dash_min_rel",
-        )
+            value=int(settings_repo.get_int("min_relevance", 0)), step=5, key="dash_min_rel")
     with controls[4]:
         search = st.text_input("Search this feed", value="", key="dash_search",
                                placeholder="fighter, event, keyword...")
@@ -69,32 +64,61 @@ def render(run_collection_callback) -> None:
         _render_sections(sort, min_relevance, search)
 
 
-def render_feed(feed_filter: str, title: str, note: str = "") -> None:
-    """A single filtered feed (used by the Rumors / Developing / Trending pages)."""
-    page_header(title, note)
-    controls = st.columns([1.3, 1.2, 3.5])
-    sort_choices = filter_mod.sort_options()
-    with controls[0]:
-        sort = st.selectbox("Sort", sort_choices, key=f"feed_sort_{feed_filter}")
-    with controls[1]:
-        min_relevance = st.number_input("Min relevance", 0, 100, 0, 5,
-                                        key=f"feed_rel_{feed_filter}")
-    with controls[2]:
-        search = st.text_input("Search", "", key=f"feed_search_{feed_filter}",
-                               placeholder="fighter, event, keyword...")
-    _render_single_feed(feed_filter, sort, min_relevance, search)
+# ------------------------------------------------------------- status bar --
+def _status_bar(counts: Dict[str, Any]) -> None:
+    last_collection = settings_repo.get_setting("last_collection_at", "")
+    x_status = x_status_panel()
+    ai_status = ai_service.ai_status()
+    live = entities_repo.list_events(limit=3, statuses=[EventStatus.LIVE.value])
+
+    pieces = [
+        f'<span>Last updated <b>{esc(humanize_age(last_collection) if last_collection else "never")}</b></span>',
+        f'<span>Stories <b>{counts["total"]}</b></span>',
+        f'<span>Breaking <b style="color:#ff6b6b">{counts["breaking"]}</b></span>',
+        f'<span>Rumors <b style="color:#ff9130">{counts["rumors"]}</b></span>',
+        f'<span>Developing <b style="color:#ffc46b">{counts["developing"]}</b></span>',
+        f'<span>X {"🟢 on" if x_status["configured"] else "⚪ not configured"}</span>',
+        f'<span>AI {"🟢 active" if ai_status["configured"] else "⚪ template mode"}</span>',
+    ]
+    if live:
+        pieces.insert(0, '<span class="lifepill live"><span class="dot"></span>'
+                         f'LIVE NOW: {esc(live[0]["name"])}</span>')
+    st.markdown('<div class="statusbar">' + '<span class="sep">|</span>'.join(pieces) + '</div>',
+                unsafe_allow_html=True)
 
 
+def _empty_state(run_collection_callback) -> None:
+    """First run. Polished, and never filled with invented news."""
+    st.markdown(
+        '<div class="emptystate">'
+        '<div class="big">YOUR UFC RADAR IS READY</div>'
+        '<div class="sub">No news has been collected yet.<br>'
+        'Press <b>Refresh now</b> to pull the latest from every enabled source - '
+        'it takes 10-60 seconds the first time.<br>'
+        'If a source fails, <b>Source health</b> shows exactly why.</div></div>',
+        unsafe_allow_html=True,
+    )
+    columns = st.columns([1, 3])
+    with columns[0]:
+        if st.button("\U0001F504 REFRESH NOW", width="stretch", type="primary",
+                     key="empty_refresh"):
+            run_collection_callback()
+    st.caption(
+        "Want to look around first? Settings → Demo data loads clearly-marked fictional "
+        "stories. They are never presented as real news and one button removes them."
+    )
+
+
+# --------------------------------------------------------------- sections --
 def _render_single_feed(feed_filter: str, sort: str, min_relevance: float, search: str) -> None:
     stories = filter_mod.fetch_stories(
         feed_filter=feed_filter, sort=sort, min_relevance=min_relevance, search=search,
         limit=settings_repo.get_int("feed_max_stories", 60),
     )
     label = feed_filter if feed_filter != "ALL" else "ALL STORIES"
-    section_header(f"{label}", len(stories),
-                   f'Sorted by {sort}' + (f' · search: "{search}"' if search else ""))
-    story_grid(stories, key_prefix=f"feed_{feed_filter}", columns=2,
-               empty_message="No stories match this filter yet. Try Refresh, or widen the filter.")
+    section_header(label, len(stories),
+                   f"Sorted by {sort}" + (f' · search: "{search}"' if search else ""))
+    card_grid(stories, "No stories match this filter yet. Try Refresh, or widen the filter.")
 
 
 def _render_sections(sort: str, min_relevance: float, search: str) -> None:
@@ -105,23 +129,93 @@ def _render_sections(sort: str, min_relevance: float, search: str) -> None:
 
     section_header("\U0001F525 BREAKING", len(sections["breaking"]),
                    "High-relevance developments from the last few hours.")
-    story_grid(sections["breaking"], "brk", empty_message="Nothing is breaking right now.")
+    card_grid(sections["breaking"], "Nothing is breaking right now.")
 
     section_header("⚡ IMPORTANT", len(sections["important"]),
                    "Ranked by the automated relevance score - a feed-ordering tool, not a truth claim.")
-    story_grid(sections["important"], "imp", empty_message="No high-relevance stories yet.")
+    card_grid(sections["important"], "No high-relevance stories yet.")
 
     section_header("\U0001F534 RUMORS & REPORTS", len(sections["rumors"]),
-                   "Unconfirmed claims. Check the source support before reporting any of these.")
-    story_grid(sections["rumors"], "rum", empty_message="No unconfirmed claims collected.")
+                   "Unconfirmed claims. Each card shows who claimed it and whether UFC has confirmed.")
+    card_grid(sections["rumors"], "No unconfirmed claims collected.")
 
     section_header("⚡ DEVELOPING", len(sections["developing"]),
                    "Stories that are still moving - open one to see the timeline of updates.")
-    story_grid(sections["developing"], "dev", empty_message="Nothing is actively developing.")
+    card_grid(sections["developing"], "Nothing is actively developing.")
 
     section_header("\U0001F4C8 TRENDING", len(sections["trending"]),
-                   "Unusual measured activity: independent outlets, updates and X posts inside the window.")
-    story_grid(sections["trending"], "trd", empty_message="No unusual activity measured.")
+                   "Unusual measured activity: independent outlets, updates and X posts in the window.")
+    card_grid(sections["trending"], "No unusual activity measured.")
+
+    render_upcoming_events()
 
     section_header("\U0001F4F0 LATEST", len(sections["latest"]), "Everything else, newest first.")
-    story_grid(sections["latest"], "lat", empty_message="No stories collected yet - press Refresh now.")
+    card_grid(sections["latest"], "No stories collected yet - press Refresh now.")
+
+
+def render_upcoming_events(limit: int = 4) -> None:
+    """Upcoming and live events with a calculated countdown."""
+    events = entities_repo.list_events(limit=limit, upcoming_only=True)
+    section_header("\U0001F4C5 UPCOMING EVENTS", len(events),
+                   "Status comes from the official schedule plus collected evidence - never "
+                   "from the date alone.")
+    if not events:
+        st.markdown('<div class="muted">No scheduled events collected yet.</div>',
+                    unsafe_allow_html=True)
+        return
+
+    blocks: List[str] = []
+    for event in events:
+        status = str(event.get("event_status") or EventStatus.UNKNOWN.value)
+        style = event_status_style(status)
+        countdown = format_countdown(event.get("scheduled_start_utc"))
+        card = entities_repo.fight_card(int(event["id"]))
+        official = [bout for bout in card if bout.get("official_status") == "official"]
+        main_event = next((bout for bout in card if bout.get("segment") == "main_event"), None)
+
+        if status == EventStatus.LIVE.value:
+            pill = '<span class="lifepill live"><span class="dot"></span>LIVE NOW</span>'
+        else:
+            pill = (f'<span class="lifepill" style="background:{style.color}22;color:{style.color};'
+                    f'border:1px solid {style.color}55">{style.emoji} {style.label}</span>')
+
+        when = "date not collected"
+        if event.get("scheduled_start_utc"):
+            when = format_display(event["scheduled_start_utc"], "%a %d %b %Y · %H:%M UTC")
+            if event.get("local_timezone"):
+                when += f' · venue timezone {esc(event["local_timezone"])}'
+        elif event.get("event_date"):
+            when = f'{format_display(event["event_date"], "%a %d %b %Y")} · start time not collected'
+
+        blocks.append(
+            f'<a class="evcard{" live" if status == EventStatus.LIVE.value else ""}" '
+            f'href="?event_id={int(event["id"])}" style="text-decoration:none">'
+            f'{pill}'
+            f'<div class="name">{esc(event["name"])}</div>'
+            f'<div class="muted">{when}</div>'
+            + (f'<div class="count">{esc(countdown)}</div>'
+               f'<div class="muted" style="margin-top:-4px">until first bout</div>'
+               if countdown else "")
+            + (f'<div class="muted">Main event: {esc(main_event["fighter_a"])} vs. '
+               f'{esc(main_event["fighter_b"])}</div>' if main_event else "")
+            + f'<div class="muted">{len(official)} official bout(s) · {len(card)} tracked</div>'
+            + (f'<div class="muted" style="color:#ff9130">⚠ {esc(event["status_conflicts"][0])}</div>'
+               if event.get("status_conflicts") else "")
+            + '</a>'
+        )
+    st.markdown(f'<div class="radar-grid">{"".join(blocks)}</div>', unsafe_allow_html=True)
+
+
+def render_feed(feed_filter: str, title: str, note: str = "") -> None:
+    """A single filtered feed, kept for direct links to a filtered view."""
+    page_header(title, note)
+    controls = st.columns([1.3, 1.2, 3.5])
+    sort_choices = filter_mod.sort_options()
+    with controls[0]:
+        sort = st.selectbox("Sort", sort_choices, key=f"feed_sort_{feed_filter}")
+    with controls[1]:
+        min_relevance = st.number_input("Min relevance", 0, 100, 0, 5, key=f"feed_rel_{feed_filter}")
+    with controls[2]:
+        search = st.text_input("Search", "", key=f"feed_search_{feed_filter}",
+                               placeholder="fighter, event, keyword...")
+    _render_single_feed(feed_filter, sort, min_relevance, search)

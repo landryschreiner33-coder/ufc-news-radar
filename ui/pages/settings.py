@@ -265,7 +265,7 @@ def _render_database() -> None:
     import pandas as pd
 
     frame = pd.DataFrame([{"Table": key, "Rows": value} for key, value in stats.items()])
-    st.dataframe(frame, use_container_width=True, hide_index=True, height=420)
+    st.dataframe(frame, width="stretch", hide_index=True, height=420)
     bullet_list([
         "Change the location with UFC_RADAR_DB in .env.",
         "Deleting the file resets everything; the app rebuilds the schema on the next start.",

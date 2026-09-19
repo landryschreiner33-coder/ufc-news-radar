@@ -6,6 +6,7 @@ from typing import Any, Dict, Iterable, List, Optional
 import streamlit as st
 
 from models.types import category_label, status_style
+from ui import nav
 from ui.theme import chip, relevance_bar, status_badge_html, support_meter_html
 from utils.textutil import truncate
 from utils.timeutil import format_display, humanize_age
@@ -119,20 +120,21 @@ def story_card(story: Dict[str, Any], key_prefix: str = "", show_button: bool = 
     )
     if show_button:
         if st.button("READ MORE →", key=f"{key_prefix}_read_{story.get('id')}",
-                     use_container_width=True):
-            navigate("research", story=story.get("id"))
+                     width="stretch"):
+            nav.open_story(int(story.get("id")))
 
 
-def story_grid(stories: List[Dict[str, Any]], key_prefix: str, columns: int = 2,
+def story_grid(stories: List[Dict[str, Any]], key_prefix: str = "", columns: int = 2,
                empty_message: str = "Nothing here yet.") -> None:
-    if not stories:
-        st.markdown(f'<div class="muted">{empty_message}</div>', unsafe_allow_html=True)
-        return
-    for start in range(0, len(stories), columns):
-        cols = st.columns(columns, gap="small")
-        for offset, story in enumerate(stories[start:start + columns]):
-            with cols[offset]:
-                story_card(story, key_prefix=key_prefix)
+    """Responsive story grid.
+
+    ``columns`` is kept for the existing call sites but is no longer a fixed
+    count: the grid reflows 4 -> 3 -> 2 -> 1 with the viewport, so a phone gets
+    one readable column instead of four squashed ones.
+    """
+    from ui.cards import card_grid
+
+    card_grid(stories, empty_message=empty_message, wide=columns <= 2)
 
 
 # ------------------------------------------------------------- listings ----

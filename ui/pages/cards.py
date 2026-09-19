@@ -4,6 +4,7 @@ from __future__ import annotations
 import streamlit as st
 
 from database import repo_entities as entities_repo
+from ui import nav
 from ui.components import metric_row, navigate, page_header, section_header
 from utils.timeutil import format_display
 
@@ -68,4 +69,4 @@ def render() -> None:
         )
         if change.get("story_id"):
             if st.button("Open the story", key=f"card_story_{change['id']}"):
-                navigate("research", story=change["story_id"])
+                nav.open_story(int(change["story_id"]))

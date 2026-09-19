@@ -12,12 +12,22 @@ from database import repo_settings as settings_repo
 from database import repo_social as social_repo
 from database import repo_stories as stories_repo
 from models.types import Category, StoryStatus
+from ui import nav
 from ui.components import (
     bullet_list, metric_row, navigate, page_header, section_header, story_grid,
 )
 from ui.theme import chip
 from utils.textutil import normalize_text, truncate
 from utils.timeutil import format_display, humanize_age
+
+
+def render_router() -> None:
+    """Fighter list, or one fighter when ?name is set."""
+    name = nav.param("name")
+    if not name:
+        render_list()
+    else:
+        render_detail(name)
 
 
 def render_list() -> None:
@@ -46,8 +56,8 @@ def render_list() -> None:
                 elif fighter.get("current_rank"):
                     rank = f" · #{fighter['current_rank']}"
                 label = f"{fighter['name']}{rank}"
-                if st.button(label, key=f"fighter_btn_{fighter['id']}", use_container_width=True):
-                    navigate("fighter", name=fighter["name"])
+                if st.button(label, key=f"fighter_btn_{fighter['id']}", width="stretch"):
+                    nav.open_fighter(fighter["name"])
                 st.markdown(
                     f'<div class="muted" style="margin:-6px 0 10px 2px">'
                     f'{fighter.get("mention_count") or 0} mentions'
@@ -62,7 +72,7 @@ def render_detail(name: str) -> None:
     fighter = entities_repo.get_fighter_by_name(name)
     display_name = fighter["name"] if fighter else name
     if st.button("← Back to fighters"):
-        navigate("fighters")
+        nav.go("fighters")
 
     nickname = f'"{fighter["nickname"]}"' if fighter and fighter.get("nickname") else ""
     page_header(display_name.upper(), nickname)
@@ -184,7 +194,7 @@ def _render_ranking_history(name: str, rows: List[Dict[str, Any]]) -> None:
         }
         for row in rows
     ])
-    st.dataframe(frame, use_container_width=True, hide_index=True)
+    st.dataframe(frame, width="stretch", hide_index=True)
     changes = rankings_repo.ranking_changes_for_fighter(name, limit=10)
     if changes:
         from processors.rankings_diff import describe_change

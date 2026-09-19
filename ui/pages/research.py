@@ -25,9 +25,33 @@ from ui.components import (
     support_block,
     timeline,
 )
+from ui import nav
 from ui.theme import chip, relevance_bar, status_badge_html
 from utils.textutil import truncate
 from utils.timeutil import format_display, humanize_age
+
+
+def render_entry() -> None:
+    """Research page entry: open ?story=<id>, or let the user choose one."""
+    story_id = nav.int_param("story")
+    if story_id is not None:
+        render(story_id)
+        return
+
+    page_header("\U0001F50E RESEARCH & VERIFICATION",
+                "Pick a story to see what is known, what is only claimed, and what to check.")
+    stories = stories_repo.list_stories(limit=40, sort="Most Relevant")
+    if not stories:
+        st.markdown(
+            '<div class="emptystate"><div class="big">NOTHING TO RESEARCH YET</div>'
+            '<div class="sub">Press <b>Refresh now</b> in the sidebar to collect the latest news, '
+            'or load the clearly-marked demo data from Settings.</div></div>',
+            unsafe_allow_html=True)
+        return
+    from ui.cards import card_grid
+
+    section_header("PICK A STORY", len(stories), "Newest and most relevant first.")
+    card_grid(stories, limit=24)
 
 
 def render(story_id: int) -> None:
@@ -35,7 +59,7 @@ def render(story_id: int) -> None:
     if story is None:
         st.error("That story no longer exists.")
         if st.button("← Back to dashboard"):
-            navigate("dashboard")
+            nav.go("dashboard")
         return
 
     context = build_story_context(story_id, story)
@@ -43,11 +67,18 @@ def render(story_id: int) -> None:
         st.error("Could not load the sources for this story.")
         return
 
-    top = st.columns([1, 6])
+    top = st.columns([1, 1.2, 5])
     with top[0]:
-        if st.button("← Back", use_container_width=True):
-            navigate("dashboard")
+        if st.button("← Dashboard", width="stretch"):
+            nav.go("dashboard")
     with top[1]:
+        if st.button("\U0001F3AC TikTok Studio", width="stretch", key="research_to_studio"):
+            st.query_params["story"] = str(story_id)
+            page = nav.get("tiktok")
+            if page is not None:
+                st.switch_page(page)
+            st.rerun()
+    with top[2]:
         st.markdown(status_badge_html(story.get("status")), unsafe_allow_html=True)
 
     page_header(_escape(story.get("headline") or "Story"),
@@ -145,7 +176,7 @@ def _render_entities(context, story: Dict[str, Any]) -> None:
                         unsafe_allow_html=True)
         for name in fighters:
             if st.button(f"\U0001F94A {name}", key=f"res_fighter_{name}"):
-                navigate("fighter", name=name)
+                nav.open_fighter(name)
     with right:
         section_header("EVENT INVOLVED")
         events = context.events
@@ -159,9 +190,9 @@ def _render_entities(context, story: Dict[str, Any]) -> None:
                 label += f" · {format_display(event['event_date'], '%b %d, %Y')}"
             if st.button(f"\U0001F4C5 {label}", key=f"res_event_{name}"):
                 if event:
-                    navigate("event", event_id=event["id"])
+                    nav.open_event(int(event["id"]))
                 else:
-                    navigate("events")
+                    nav.go("events")
 
     section_header("RELATED STORIES")
     related = stories_repo.related_stories(story, limit=4)
