@@ -25,7 +25,7 @@ from utils.timeutil import utcnow_iso
 logger = get_logger(__name__)
 
 SCHEMA_FILE = PROJECT_ROOT / "database" / "schema.sql"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Future schema changes go here as (version, name, list-of-SQL-statements).
 # Version 1 is the base schema in schema.sql; a fresh database is created at
@@ -75,6 +75,24 @@ MIGRATIONS: List[tuple] = [
             "ALTER TABLE fight_card_items ADD COLUMN official_status TEXT NOT NULL DEFAULT 'reported'",
             "ALTER TABLE fight_card_items ADD COLUMN canonical_fighter_a TEXT",
             "ALTER TABLE fight_card_items ADD COLUMN canonical_fighter_b TEXT",
+        ],
+    ),
+    (
+        4,
+        "data correction history",
+        [
+            """CREATE TABLE IF NOT EXISTS data_corrections (
+                   id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                   kind         TEXT    NOT NULL,
+                   target_table TEXT    NOT NULL,
+                   target_id    INTEGER,
+                   before_value TEXT,
+                   after_value  TEXT,
+                   reason       TEXT,
+                   applied_by   TEXT    NOT NULL DEFAULT 'user',
+                   applied_at   TEXT    NOT NULL
+               )""",
+            "CREATE INDEX IF NOT EXISTS idx_corrections_kind ON data_corrections(kind)",
         ],
     ),
 ]

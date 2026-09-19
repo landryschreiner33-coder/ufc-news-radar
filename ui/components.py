@@ -134,7 +134,8 @@ def story_grid(stories: List[Dict[str, Any]], key_prefix: str = "", columns: int
     """
     from ui.cards import card_grid
 
-    card_grid(stories, empty_message=empty_message, wide=columns <= 2)
+    card_grid(stories, empty_message=empty_message, wide=columns <= 2,
+              key=key_prefix or "legacy")
 
 
 # ------------------------------------------------------------- listings ----

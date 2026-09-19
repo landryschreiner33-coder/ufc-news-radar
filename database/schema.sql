@@ -517,6 +517,20 @@ CREATE TABLE IF NOT EXISTS ai_cache (
 );
 
 -- ------------------------------------------------------------- migrations --
+-- Manual data corrections, kept as history so a merge or reclassification can
+-- always be explained (and reviewed) later.
+CREATE TABLE IF NOT EXISTS data_corrections (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind         TEXT    NOT NULL,   -- merge_events|merge_fighters|reassign_story|recategorize|reclassify_source
+    target_table TEXT    NOT NULL,
+    target_id    INTEGER,
+    before_value TEXT,
+    after_value  TEXT,
+    reason       TEXT,
+    applied_by   TEXT    NOT NULL DEFAULT 'user',
+    applied_at   TEXT    NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS migrations (
     version    INTEGER PRIMARY KEY,
     name       TEXT NOT NULL,

@@ -51,7 +51,7 @@ def render_entry() -> None:
     from ui.cards import card_grid
 
     section_header("PICK A STORY", len(stories), "Newest and most relevant first.")
-    card_grid(stories, limit=24)
+    card_grid(stories, limit=24, key="pick")
 
 
 def render(story_id: int) -> None:

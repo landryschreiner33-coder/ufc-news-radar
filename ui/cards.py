@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 import streamlit as st
 
 from models.types import category_label, status_style
+from ui import nav
 from ui.images import image_for_story
 from utils.textutil import truncate
 from utils.timeutil import humanize_age
@@ -95,8 +96,7 @@ def card_html(story: Dict[str, Any], event: Optional[Dict[str, Any]] = None) -> 
             f'<b>UFC confirmation:</b> {official}</div>'
         )
 
-    return f"""<a class="{' '.join(classes)}" href="?story={int(story.get('id') or 0)}"
-   aria-label="Open research for: {esc(story.get('headline'))}">
+    return f"""<div class="{' '.join(classes)}">
   <div class="thumb"><img src="{esc(image['url'])}" alt="{esc(image['caption'])}" loading="lazy">{placeholder_note}</div>
   <div class="body">
     <div class="badges">{status_badge(status)}{_flag_badges(story)}</div>
@@ -106,16 +106,22 @@ def card_html(story: Dict[str, Any], event: Optional[Dict[str, Any]] = None) -> 
     <div class="foot">
       <span>{sources} source{'s' if sources != 1 else ''} · {independent} independent<br>
             {esc(category_label(story.get('category')))} · {esc(humanize_age(story.get('last_updated_at')))}</span>
-      <span class="more">READ MORE →</span>
     </div>
     {f'<div class="muted" style="font-size:0.7rem">{entity_line}</div>' if entity_line else ''}
   </div>
-</a>"""
+</div>"""
 
 
 def card_grid(stories: List[Dict[str, Any]], empty_message: str = "Nothing here yet.",
-              wide: bool = False, limit: Optional[int] = None) -> None:
-    """Render a responsive grid of story cards."""
+              wide: bool = False, limit: Optional[int] = None, key: str = "grid") -> None:
+    """A responsive grid of story cards, each with a real READ MORE button.
+
+    Built on ``st.container(horizontal=True, wrap=True)`` rather than a block of
+    HTML anchors. Anchors would be simpler, but Streamlit's page router rewrites
+    in-app links and drops their query string, so a card link cannot carry the
+    story id - and an absolute URL is forced to open in a new tab. Native
+    containers wrap exactly like a CSS grid and keep the buttons working.
+    """
     items = list(stories or [])
     if limit:
         items = items[:limit]
@@ -123,9 +129,15 @@ def card_grid(stories: List[Dict[str, Any]], empty_message: str = "Nothing here 
         st.markdown(f'<div class="muted" style="padding:6px 2px">{esc(empty_message)}</div>',
                     unsafe_allow_html=True)
         return
-    cards = "".join(card_html(story) for story in items)
-    st.markdown(f'<div class="radar-grid{" wide" if wide else ""}">{cards}</div>',
-                unsafe_allow_html=True)
+
+    width = 350 if wide else 268
+    with st.container(horizontal=True, wrap=True, key=f"cardgrid_{key}", gap="small"):
+        for story in items:
+            story_id = int(story.get("id") or 0)
+            with st.container(width=width, key=f"card_{key}_{story_id}"):
+                st.markdown(card_html(story), unsafe_allow_html=True)
+                if st.button("READ MORE →", key=f"read_{key}_{story_id}", width="stretch"):
+                    nav.open_story(story_id)
 
 
 def grouped_story_block(story: Dict[str, Any], related: List[Dict[str, Any]]) -> None:
@@ -135,7 +147,7 @@ def grouped_story_block(story: Dict[str, Any], related: List[Dict[str, Any]]) ->
     one item with the others one click away, and the independent-source count
     makes clear how much of it is genuinely separate reporting.
     """
-    st.markdown(f'<div class="radar-grid">{card_html(story)}</div>', unsafe_allow_html=True)
+    card_grid([story], key=f"grouped_{int(story.get('id') or 0)}")
     if not related:
         return
     independent = int(story.get("independent_source_count") or 0)

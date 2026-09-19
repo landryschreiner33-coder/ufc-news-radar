@@ -216,18 +216,16 @@ def main() -> None:
     # item URL. Both should open the item rather than drop it.
     same_page = previous is None or previous == current
 
-    if st.query_params.get("story") and current not in ("research", "tiktok-studio"):
-        if same_page:
-            st.switch_page(PAGES["research"])
-        del st.query_params["story"]
-    if st.query_params.get("event_id") and current != "events":
-        if same_page:
-            st.switch_page(PAGES["events"])
-        del st.query_params["event_id"]
-    if st.query_params.get("name") and current != "fighters":
-        if same_page:
-            st.switch_page(PAGES["fighters"])
-        del st.query_params["name"]
+    for parameter, owners, target in (
+        ("story", ("research", "tiktok-studio"), "research"),
+        ("event_id", ("events",), "events"),
+        ("name", ("fighters",), "fighters"),
+    ):
+        if current in owners or nav.selection(parameter) is None:
+            continue
+        if same_page and st.query_params.get(parameter):
+            st.switch_page(PAGES[target])
+        nav.clear_items(parameter)
 
     sidebar_extras()
     page.run()

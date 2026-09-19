@@ -31,7 +31,7 @@ COLORS = {
 CSS = f"""
 <style>
   .stApp {{ background: {COLORS['bg']}; }}
-  .block-container {{ padding-top: 1.6rem; padding-bottom: 3rem; max-width: 1500px; }}
+  .block-container {{ padding-top: 1.6rem; padding-bottom: 3rem; max-width: 1640px; }}
 
   .radar-header {{
       display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;

@@ -19,6 +19,7 @@ from models.types import EventStatus, event_status_style
 from processors.event_lifecycle import format_countdown
 from social.x_monitor import x_status_panel
 from ui import filters as filter_mod
+from ui import nav
 from ui.cards import card_grid, esc
 from ui.components import notice, page_header, section_header
 from utils.timeutil import format_display, humanize_age
@@ -118,7 +119,8 @@ def _render_single_feed(feed_filter: str, sort: str, min_relevance: float, searc
     label = feed_filter if feed_filter != "ALL" else "ALL STORIES"
     section_header(label, len(stories),
                    f"Sorted by {sort}" + (f' · search: "{search}"' if search else ""))
-    card_grid(stories, "No stories match this filter yet. Try Refresh, or widen the filter.")
+    card_grid(stories, "No stories match this filter yet. Try Refresh, or widen the filter.",
+              key=f"feed_{feed_filter}")
 
 
 def _render_sections(sort: str, min_relevance: float, search: str) -> None:
@@ -129,28 +131,28 @@ def _render_sections(sort: str, min_relevance: float, search: str) -> None:
 
     section_header("\U0001F525 BREAKING", len(sections["breaking"]),
                    "High-relevance developments from the last few hours.")
-    card_grid(sections["breaking"], "Nothing is breaking right now.")
+    card_grid(sections["breaking"], "Nothing is breaking right now.", key="breaking")
 
     section_header("⚡ IMPORTANT", len(sections["important"]),
                    "Ranked by the automated relevance score - a feed-ordering tool, not a truth claim.")
-    card_grid(sections["important"], "No high-relevance stories yet.")
+    card_grid(sections["important"], "No high-relevance stories yet.", key="important")
 
     section_header("\U0001F534 RUMORS & REPORTS", len(sections["rumors"]),
                    "Unconfirmed claims. Each card shows who claimed it and whether UFC has confirmed.")
-    card_grid(sections["rumors"], "No unconfirmed claims collected.")
+    card_grid(sections["rumors"], "No unconfirmed claims collected.", key="rumors")
 
     section_header("⚡ DEVELOPING", len(sections["developing"]),
                    "Stories that are still moving - open one to see the timeline of updates.")
-    card_grid(sections["developing"], "Nothing is actively developing.")
+    card_grid(sections["developing"], "Nothing is actively developing.", key="developing")
 
     section_header("\U0001F4C8 TRENDING", len(sections["trending"]),
                    "Unusual measured activity: independent outlets, updates and X posts in the window.")
-    card_grid(sections["trending"], "No unusual activity measured.")
+    card_grid(sections["trending"], "No unusual activity measured.", key="trending")
 
     render_upcoming_events()
 
     section_header("\U0001F4F0 LATEST", len(sections["latest"]), "Everything else, newest first.")
-    card_grid(sections["latest"], "No stories collected yet - press Refresh now.")
+    card_grid(sections["latest"], "No stories collected yet - press Refresh now.", key="latest")
 
 
 def render_upcoming_events(limit: int = 4) -> None:
@@ -164,46 +166,17 @@ def render_upcoming_events(limit: int = 4) -> None:
                     unsafe_allow_html=True)
         return
 
-    blocks: List[str] = []
+    from ui.pages.events import event_card_grid
+
+    event_card_grid(events, key="dash_upcoming")
+
+    # Any disagreement between reporting and the official schedule is surfaced
+    # next to the event, never silently applied.
     for event in events:
-        status = str(event.get("event_status") or EventStatus.UNKNOWN.value)
-        style = event_status_style(status)
-        countdown = format_countdown(event.get("scheduled_start_utc"))
-        card = entities_repo.fight_card(int(event["id"]))
-        official = [bout for bout in card if bout.get("official_status") == "official"]
-        main_event = next((bout for bout in card if bout.get("segment") == "main_event"), None)
-
-        if status == EventStatus.LIVE.value:
-            pill = '<span class="lifepill live"><span class="dot"></span>LIVE NOW</span>'
-        else:
-            pill = (f'<span class="lifepill" style="background:{style.color}22;color:{style.color};'
-                    f'border:1px solid {style.color}55">{style.emoji} {style.label}</span>')
-
-        when = "date not collected"
-        if event.get("scheduled_start_utc"):
-            when = format_display(event["scheduled_start_utc"], "%a %d %b %Y · %H:%M UTC")
-            if event.get("local_timezone"):
-                when += f' · venue timezone {esc(event["local_timezone"])}'
-        elif event.get("event_date"):
-            when = f'{format_display(event["event_date"], "%a %d %b %Y")} · start time not collected'
-
-        blocks.append(
-            f'<a class="evcard{" live" if status == EventStatus.LIVE.value else ""}" '
-            f'href="?event_id={int(event["id"])}" style="text-decoration:none">'
-            f'{pill}'
-            f'<div class="name">{esc(event["name"])}</div>'
-            f'<div class="muted">{when}</div>'
-            + (f'<div class="count">{esc(countdown)}</div>'
-               f'<div class="muted" style="margin-top:-4px">until first bout</div>'
-               if countdown else "")
-            + (f'<div class="muted">Main event: {esc(main_event["fighter_a"])} vs. '
-               f'{esc(main_event["fighter_b"])}</div>' if main_event else "")
-            + f'<div class="muted">{len(official)} official bout(s) · {len(card)} tracked</div>'
-            + (f'<div class="muted" style="color:#ff9130">⚠ {esc(event["status_conflicts"][0])}</div>'
-               if event.get("status_conflicts") else "")
-            + '</a>'
-        )
-    st.markdown(f'<div class="radar-grid">{"".join(blocks)}</div>', unsafe_allow_html=True)
+        for note in (event.get("status_conflicts") or [])[:1]:
+            st.markdown(
+                f'<div class="warn-box">⚠ <b>{esc(event["name"])}:</b> {esc(note)}</div>',
+                unsafe_allow_html=True)
 
 
 def render_feed(feed_filter: str, title: str, note: str = "") -> None:

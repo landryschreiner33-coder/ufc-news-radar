@@ -20,7 +20,7 @@ def render() -> None:
     page_header("SETTINGS", "Secrets live in your .env file - never in the app or the database.")
     tabs = st.tabs([
         "General", "Sources", "X / Twitter", "AI provider", "Source classifications",
-        "Demo data", "Database",
+        "Demo data", "Database", "Data corrections",
     ])
     with tabs[0]:
         _render_general()
@@ -36,6 +36,8 @@ def render() -> None:
         _render_demo()
     with tabs[6]:
         _render_database()
+    with tabs[7]:
+        _render_corrections()
 
 
 def _render_general() -> None:
@@ -271,3 +273,127 @@ def _render_database() -> None:
         "Deleting the file resets everything; the app rebuilds the schema on the next start.",
         "The schema is kept PostgreSQL-friendly (ISO-8601 UTC timestamps, JSON text columns).",
     ])
+    _render_storage()
+    _render_backup()
+
+
+def _render_storage() -> None:
+    """Say plainly whether collected history will actually survive a restart."""
+    from database.persistence import storage_report
+
+    report = storage_report()
+    section_header("STORAGE")
+    box = "warn-box" if report.is_ephemeral else "panel"
+    st.markdown(
+        f'<div class="{box}"><b>{report.headline}</b><br>{report.detail}</div>',
+        unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="kv">Backend: <b>{report.backend}</b> · size <b>{report.size_mb} MB</b></div>',
+        unsafe_allow_html=True)
+    bullet_list(report.advice)
+
+
+def _render_backup() -> None:
+    from database.persistence import export_bytes, restore_database, validate_backup
+
+    section_header("BACKUP & RESTORE",
+                   note="A backup is a single file. Keep one before any redeploy.")
+    columns = st.columns([1, 1])
+    with columns[0]:
+        try:
+            st.download_button(
+                "⬇ Download a backup", data=export_bytes(),
+                file_name="ufc_news_radar_backup.db", mime="application/octet-stream",
+                width="stretch", key="backup_download")
+        except Exception as exc:
+            st.error(f"Could not build a backup: {exc}")
+    with columns[1]:
+        upload = st.file_uploader("Restore from a backup file", type=["db", "sqlite"],
+                                  key="backup_upload")
+        if upload is not None:
+            import tempfile
+            from pathlib import Path as _Path
+
+            folder = tempfile.mkdtemp()
+            target = _Path(folder) / "restore.db"
+            target.write_bytes(upload.getvalue())
+            check = validate_backup(str(target))
+            if not check["ok"]:
+                st.error(check["error"])
+            else:
+                st.info(f"This backup holds {check['articles']} articles and "
+                        f"{check['stories']} stories. Restoring replaces everything "
+                        "currently collected.")
+                if st.button("Replace the current database", type="primary",
+                             key="backup_restore_confirm"):
+                    outcome = restore_database(str(target))
+                    if outcome.get("ok"):
+                        st.success("Restored. The previous database was kept alongside it.")
+                        st.rerun()
+                    else:
+                        st.error(outcome.get("error", "Restore failed."))
+
+
+def _render_corrections() -> None:
+    """Manual fixes for the things the automated rules get wrong.
+
+    Nothing here invents data - these only merge, relabel or reassign what was
+    already collected, and every change is recorded with a reason.
+    """
+    from database import corrections
+    from database import repo_entities as entities_repo
+
+    section_header("DATA CORRECTIONS",
+                   note="These only merge or relabel collected data. They never invent "
+                        "facts, sources or quotes, and every change is logged below.")
+
+    st.markdown("**Merge two events**")
+    events = entities_repo.all_events()
+    if len(events) >= 2:
+        labels = {f"#{event['id']} {event['name']}": int(event["id"]) for event in events}
+        columns = st.columns([2, 2, 2])
+        keep = columns[0].selectbox("Keep", list(labels), key="fix_ev_keep")
+        drop = columns[1].selectbox("Merge away", list(labels), index=1, key="fix_ev_drop")
+        reason = columns[2].text_input("Reason", key="fix_ev_reason",
+                                       placeholder="same event, two spellings")
+        if st.button("Merge events", key="fix_ev_go"):
+            outcome = corrections.merge_events(labels[keep], labels[drop], reason)
+            (st.success if outcome["ok"] else st.error)(
+                outcome.get("message") or outcome.get("error"))
+            if outcome["ok"]:
+                st.rerun()
+    else:
+        st.markdown('<div class="muted">Need at least two events.</div>', unsafe_allow_html=True)
+
+    st.markdown("**Merge two fighters**")
+    fighters = entities_repo.list_fighters(limit=400, order="mentions")
+    named = [fighter for fighter in fighters if fighter.get("mention_count")]
+    pool = named or fighters[:80]
+    if len(pool) >= 2:
+        labels = {f"#{fighter['id']} {fighter['name']}": int(fighter["id"]) for fighter in pool}
+        columns = st.columns([2, 2, 2])
+        keep = columns[0].selectbox("Keep", list(labels), key="fix_fi_keep")
+        drop = columns[1].selectbox("Merge away", list(labels), index=1, key="fix_fi_drop")
+        reason = columns[2].text_input("Reason", key="fix_fi_reason",
+                                       placeholder="duplicate spelling")
+        if st.button("Merge fighters", key="fix_fi_go"):
+            outcome = corrections.merge_fighters(labels[keep], labels[drop], reason)
+            (st.success if outcome["ok"] else st.error)(
+                outcome.get("message") or outcome.get("error"))
+            if outcome["ok"]:
+                st.rerun()
+
+    section_header("CORRECTION HISTORY")
+    rows = corrections.history(limit=60)
+    if not rows:
+        st.markdown('<div class="muted">No manual corrections have been made.</div>',
+                    unsafe_allow_html=True)
+        return
+    import pandas as pd
+
+    st.dataframe(pd.DataFrame([
+        {"When": row["applied_at"], "Kind": row["kind"], "Table": row["target_table"],
+         "Before": str(row["before_value"])[:60], "After": str(row["after_value"])[:60],
+         "Reason": row["reason"] or "-"}
+        for row in rows
+    ]), width="stretch", hide_index=True)

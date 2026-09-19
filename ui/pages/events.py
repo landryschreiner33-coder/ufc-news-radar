@@ -75,8 +75,7 @@ def _event_card_html(event: Dict[str, Any]) -> str:
         when = format_display(event["event_date"], "%a %d %b %Y") + " · start time not collected"
     location = event.get("city") or event.get("location") or ""
     return (
-        f'<a class="evcard{" live" if status == EventStatus.LIVE.value else ""}" '
-        f'href="?event_id={int(event["id"])}" style="text-decoration:none">'
+        f'<div class="evcard{" live" if status == EventStatus.LIVE.value else ""}">'
         f'<img src="{esc(image["url"])}" alt="{esc(image["caption"])}" '
         f'style="width:100%;aspect-ratio:40/15;object-fit:cover;border-radius:8px" loading="lazy">'
         f'{_status_pill(status)}'
@@ -85,8 +84,23 @@ def _event_card_html(event: Dict[str, Any]) -> str:
         + (f'<div class="muted">{esc(location)}</div>' if location else "")
         + (f'<div class="count">{esc(countdown)}</div>'
            f'<div class="muted" style="margin-top:-4px">until first bout</div>' if countdown else "")
-        + '</a>'
+        + '</div>'
     )
+
+
+def event_card_grid(events: List[Dict[str, Any]], key: str) -> None:
+    """Wrapping grid of event cards, each with a real button.
+
+    Same reason as the story grid: Streamlit rewrites in-app anchors and drops
+    their query string, so navigation has to go through a widget.
+    """
+    with st.container(horizontal=True, wrap=True, key=f"evgrid_{key}", gap="small"):
+        for event in events:
+            event_id = int(event["id"])
+            with st.container(width=300, key=f"ev_{key}_{event_id}"):
+                st.markdown(_event_card_html(event), unsafe_allow_html=True)
+                if st.button("OPEN EVENT →", key=f"evopen_{key}_{event_id}", width="stretch"):
+                    nav.open_event(event_id)
 
 
 def render_list() -> None:
@@ -115,9 +129,7 @@ def render_list() -> None:
             continue
         remaining = [event for event in remaining if event not in group]
         section_header(label, len(group))
-        st.markdown('<div class="radar-grid">'
-                    + "".join(_event_card_html(event) for event in group) + '</div>',
-                    unsafe_allow_html=True)
+        event_card_grid(group, key=label.split()[0].lower())
 
 
 def render_detail(event_id: int) -> None:
@@ -187,15 +199,15 @@ def render_detail(event_id: int) -> None:
     section_header("INJURIES, REPLACEMENTS & CANCELLATIONS")
     card_grid([story for story in stories if story.get("category") in (
         Category.INJURY.value, Category.REPLACEMENT.value, Category.CANCELLATION.value)],
-        "None collected for this event.", limit=6)
+        "None collected for this event.", limit=6, key=f"evchg_{event_id}")
 
     section_header("RUMORS & DEVELOPING")
     card_grid([story for story in stories
                if story.get("is_developing") or story.get("status") in ("RUMOR", "UNVERIFIED")],
-              "None collected for this event.", limit=6)
+              "None collected for this event.", limit=6, key=f"evrum_{event_id}")
 
     section_header("EVENT NEWS", len(stories))
-    card_grid(stories, "No stories mention this event yet.", limit=8)
+    card_grid(stories, "No stories mention this event yet.", limit=8, key=f"evnews_{event_id}")
 
     _render_social(event["name"])
 
