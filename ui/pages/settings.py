@@ -342,6 +342,8 @@ def _render_corrections() -> None:
     """
     from database import corrections
     from database import repo_entities as entities_repo
+    from database import repo_sources as sources_repo
+    from database import repo_stories as stories_repo
 
     section_header("DATA CORRECTIONS",
                    note="These only merge or relabel collected data. They never invent "
@@ -382,6 +384,66 @@ def _render_corrections() -> None:
                 outcome.get("message") or outcome.get("error"))
             if outcome["ok"]:
                 st.rerun()
+
+    st.markdown("**Fix a story's category or event**")
+    stories = stories_repo.list_stories(limit=80, sort="Recently Updated")
+    if stories:
+        from models.types import CATEGORY_LABELS, Category
+
+        labels = {f"#{story['id']} {story['headline'][:70]}": int(story["id"])
+                  for story in stories}
+        chosen = st.selectbox("Story", list(labels), key="fix_st_pick")
+        story_id = labels[chosen]
+        current = next(story for story in stories if int(story["id"]) == story_id)
+
+        columns = st.columns([2, 2, 2])
+        categories = [member.value for member in Category]
+        category = columns[0].selectbox(
+            "Category", categories,
+            index=categories.index(current["category"]) if current["category"] in categories else 0,
+            format_func=lambda value: CATEGORY_LABELS.get(value, value), key="fix_st_cat")
+        events = entities_repo.all_events()
+        event_labels = {"(none)": None}
+        event_labels.update({f"#{event['id']} {event['name']}": int(event["id"])
+                             for event in events})
+        event_choice = columns[1].selectbox("Event", list(event_labels), key="fix_st_ev")
+        reason = columns[2].text_input("Reason", key="fix_st_reason",
+                                       placeholder="mis-categorised by the keyword rules")
+
+        buttons = st.columns([1, 1, 3])
+        if buttons[0].button("Set category", key="fix_st_cat_go"):
+            outcome = corrections.recategorize_story(story_id, category, reason)
+            (st.success if outcome["ok"] else st.error)(
+                outcome.get("message") or outcome.get("error"))
+        if buttons[1].button("Set event", key="fix_st_ev_go"):
+            outcome = corrections.reassign_story_event(
+                story_id, event_labels[event_choice], reason)
+            (st.success if outcome["ok"] else st.error)(
+                outcome.get("message") or outcome.get("error"))
+
+    st.markdown("**Reclassify a source**")
+    st.markdown(
+        '<div class="muted">Changes how much weight a source carries from now on. '
+        'It never rewrites stories that were already scored.</div>',
+        unsafe_allow_html=True)
+    sources = sources_repo.list_sources()
+    if sources:
+        from models.types import SourceType
+
+        source_labels = {f"{source['name']} ({source['source_type']})": int(source["id"])
+                         for source in sources}
+        columns = st.columns([2, 1.5, 1.2, 2])
+        picked = columns[0].selectbox("Source", list(source_labels), key="fix_src_pick")
+        types = [member.value for member in SourceType]
+        new_type = columns[1].selectbox("New type", types, key="fix_src_type")
+        weight = columns[2].number_input("Reliability", 0.0, 1.0, 0.5, 0.05, key="fix_src_weight")
+        reason = columns[3].text_input("Reason", key="fix_src_reason",
+                                       placeholder="they have been reliable/unreliable")
+        if st.button("Reclassify source", key="fix_src_go"):
+            outcome = corrections.reclassify_source(
+                source_labels[picked], new_type, weight, reason=reason)
+            (st.success if outcome["ok"] else st.error)(
+                outcome.get("message") or outcome.get("error"))
 
     section_header("CORRECTION HISTORY")
     rows = corrections.history(limit=60)

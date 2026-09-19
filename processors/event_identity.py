@@ -186,14 +186,3 @@ def display_name_rank(name: Optional[str], data_origin: str = "detected") -> tup
     origin_rank = {"collected": 3, "official": 3, "user": 2}.get(data_origin, 1)
     has_matchup = 1 if _MATCHUP_RE.search(strip_sponsors(text)) else 0
     return (origin_rank, has_matchup, len(text))
-
-
-def same_event(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
-    """True when two event rows describe one real event."""
-    return canonical_key(
-        left.get("name"), left.get("ufc_url"),
-        left.get("official_event_id"), left.get("event_date"),
-    ) == canonical_key(
-        right.get("name"), right.get("ufc_url"),
-        right.get("official_event_id"), right.get("event_date"),
-    )

@@ -112,8 +112,42 @@ def card_html(story: Dict[str, Any], event: Optional[Dict[str, Any]] = None) -> 
 </div>"""
 
 
+def related_reports(story: Dict[str, Any], key: str) -> None:
+    """The same story from other outlets, collapsed.
+
+    The feed shows one card per underlying development, not five near-identical
+    headlines. The count of *independent* sources is shown next to the total so
+    it stays obvious that ten copies of one report are still one report.
+    """
+    from database import repo_articles as articles_repo
+
+    story_id = int(story.get("id") or 0)
+    total = int(story.get("article_count") or 0)
+    if total < 2:
+        return
+    independent = int(story.get("independent_source_count") or 0)
+    label = (f"View {total - 1} related report(s) · {independent} independent "
+             f"of {total} total")
+    with st.expander(label):
+        articles = articles_repo.articles_for_story(story_id)
+        primary_id = story.get("primary_article_id")
+        for article in articles:
+            if primary_id and int(article.get("id") or 0) == int(primary_id):
+                continue
+            credit = " · credits another outlet" if article.get("is_derivative") else ""
+            link = (f'<a href="{esc(article.get("url"))}" target="_blank" '
+                    f'rel="noopener noreferrer">{esc(article.get("title"))}</a>')
+            st.markdown(
+                f'<div style="margin-bottom:7px"><div class="kv">{link}</div>'
+                f'<div class="muted">{esc(article.get("source_name") or "unknown source")} · '
+                f'{esc(humanize_age(article.get("published_at") or article.get("collected_at")))}'
+                f'{credit}</div></div>',
+                unsafe_allow_html=True)
+
+
 def card_grid(stories: List[Dict[str, Any]], empty_message: str = "Nothing here yet.",
-              wide: bool = False, limit: Optional[int] = None, key: str = "grid") -> None:
+              wide: bool = False, limit: Optional[int] = None, key: str = "grid",
+              show_related: bool = True) -> None:
     """A responsive grid of story cards, each with a real READ MORE button.
 
     Built on ``st.container(horizontal=True, wrap=True)`` rather than a block of
@@ -138,28 +172,5 @@ def card_grid(stories: List[Dict[str, Any]], empty_message: str = "Nothing here 
                 st.markdown(card_html(story), unsafe_allow_html=True)
                 if st.button("READ MORE →", key=f"read_{key}_{story_id}", width="stretch"):
                     nav.open_story(story_id)
-
-
-def grouped_story_block(story: Dict[str, Any], related: List[Dict[str, Any]]) -> None:
-    """A story plus its duplicate reports, collapsed.
-
-    The feed shows the primary report only; the same story from five outlets is
-    one item with the others one click away, and the independent-source count
-    makes clear how much of it is genuinely separate reporting.
-    """
-    card_grid([story], key=f"grouped_{int(story.get('id') or 0)}")
-    if not related:
-        return
-    independent = int(story.get("independent_source_count") or 0)
-    with st.expander(f"View {len(related)} related report(s) · "
-                     f"{independent} independent source(s) · {len(related) + 1} total"):
-        for item in related:
-            st.markdown(
-                f'<div class="panel" style="padding:9px 12px;margin-bottom:6px">'
-                f'<div class="kv"><a href="{esc(item.get("url"))}" target="_blank" '
-                f'rel="noopener noreferrer">{esc(item.get("title"))}</a></div>'
-                f'<div class="muted">{esc(item.get("source_name") or "unknown source")} · '
-                f'{esc(humanize_age(item.get("published_at") or item.get("collected_at")))}'
-                f'{" · credits another outlet" if item.get("is_derivative") else ""}</div></div>',
-                unsafe_allow_html=True,
-            )
+                if show_related:
+                    related_reports(story, key)

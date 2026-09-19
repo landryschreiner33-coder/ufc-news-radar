@@ -93,31 +93,3 @@ def int_param(name: str) -> Optional[int]:
 def param(name: str, default: Optional[str] = None) -> Optional[str]:
     value = selection(name)
     return default if value is None else str(value)
-
-
-def app_origin() -> str:
-    """The scheme://host[:port] this app is being served from.
-
-    Needed because Streamlit's page router rewrites any *relative* anchor whose
-    path matches one of its pages and drops the query string with it, so
-    "?story=12" and "/?story=12" both arrive empty. An absolute URL is left
-    alone, so item links are built from the live request URL rather than
-    hard-coded.
-    """
-    try:
-        from urllib.parse import urlsplit
-
-        parts = urlsplit(str(st.context.url or ""))
-        if parts.scheme and parts.netloc:
-            return f"{parts.scheme}://{parts.netloc}"
-    except Exception:
-        pass
-    return ""
-
-
-def item_link(**params: Any) -> str:
-    """An absolute href that carries item parameters through to app.py."""
-    from urllib.parse import urlencode
-
-    query = urlencode({key: value for key, value in params.items() if value is not None})
-    return f"{app_origin()}/?{query}"

@@ -263,3 +263,75 @@ def test_the_validator_reports_an_event_completed_before_it_starts():
          hours_ago(1), hours_ago(1)))
     findings = validator.check_event_status_sanity()
     assert any(finding.check == "future_event_completed" for finding in findings)
+
+
+# ------------------------------------------- safe corrections (exposed UI) --
+def test_a_story_can_be_recategorised_and_the_change_is_logged(ingest, make_article):
+    from processors import pipeline
+
+    ingest([make_article(title="Something categorised wrongly")])
+    pipeline.cluster_unassigned()
+    story_id = int(stories_repo.list_stories(limit=1)[0]["id"])
+    outcome = corrections.recategorize_story(story_id, "injury", reason="keyword rules got it wrong")
+    assert outcome["ok"], outcome
+    assert stories_repo.get_story(story_id)["category"] == "injury"
+    assert any(row["kind"] == "recategorize" for row in corrections.history())
+
+
+def test_an_unknown_category_is_refused(ingest, make_article):
+    from processors import pipeline
+
+    ingest([make_article(title="Anything")])
+    pipeline.cluster_unassigned()
+    story_id = int(stories_repo.list_stories(limit=1)[0]["id"])
+    assert corrections.recategorize_story(story_id, "not-a-category")["ok"] is False
+
+
+def test_a_story_can_be_reassigned_to_another_event(ingest, make_article):
+    from processors import pipeline
+
+    ingest([make_article(title="A story about a card")])
+    pipeline.cluster_unassigned()
+    story_id = int(stories_repo.list_stories(limit=1)[0]["id"])
+    event_id = entities_repo.upsert_event("UFC 340", data_origin="collected")
+    assert corrections.reassign_story_event(story_id, event_id, "wrong event")["ok"]
+    assert stories_repo.get_story(story_id)["event_id"] == event_id
+    assert corrections.reassign_story_event(story_id, 999999)["ok"] is False
+
+
+def test_a_source_can_be_reclassified_and_the_old_value_is_recorded():
+    from database import repo_sources as sources_repo
+
+    source = sources_repo.list_sources()[0]
+    before = source["source_type"]
+    outcome = corrections.reclassify_source(int(source["id"]), "FAN_ACCOUNT", 0.1,
+                                            reason="has been unreliable")
+    assert outcome["ok"], outcome
+    assert sources_repo.get_source(int(source["id"]))["source_type"] == "FAN_ACCOUNT"
+    entry = next(row for row in corrections.history() if row["kind"] == "reclassify_source")
+    assert before in str(entry["before_value"])
+
+
+# ------------------------------------------------ grouped duplicate reports --
+def test_the_feed_shows_one_story_for_several_reports_of_it(ingest, make_article):
+    """Five outlets reporting one thing is one card, not five headlines."""
+    from processors import pipeline
+
+    ingest([
+        make_article(title="Jon Jones vs. Tom Aspinall booked for UFC 320",
+                     source_name="ESPN", independence_group="espn",
+                     excerpt="The bout is booked for UFC 320."),
+        make_article(title="Jones vs. Aspinall set for UFC 320",
+                     source_name="MMA Fighting", independence_group="vox",
+                     excerpt="The bout is booked for UFC 320."),
+        make_article(title="UFC 320 to feature Jones vs. Aspinall",
+                     source_name="MMA Junkie", independence_group="usatoday",
+                     excerpt="The bout is booked for UFC 320."),
+    ])
+    pipeline.cluster_unassigned()
+    stories = stories_repo.list_stories(limit=10)
+    assert len(stories) == 1, "three reports of one development should be one story"
+    pipeline.recompute_story(int(stories[0]["id"]))
+    story = stories_repo.get_story(int(stories[0]["id"]))
+    assert story["article_count"] == 3
+    assert articles_repo.articles_for_story(int(story["id"]))
