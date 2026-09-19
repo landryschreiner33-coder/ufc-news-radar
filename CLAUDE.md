@@ -298,7 +298,7 @@ layer with template fallback, the full dashboard with research mode, TikTok
 Studio, check-before-reporting, watchlists, search, filters, source health,
 settings, backups, data corrections and demo mode.
 
-**283 pytest tests pass.** `scripts/validate_production_data.py` reports 0
+**288 pytest tests pass.** `scripts/validate_production_data.py` reports 0
 errors and 0 warnings. The app was driven end to end in Chromium: all 12 pages
 render with no exceptions and no console errors, and the card grid was measured
 reflowing 4 → 3 → 2 → 1 columns between 1800px and 430px with no horizontal

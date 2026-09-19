@@ -235,7 +235,7 @@ away no longer bounces back to the previous item.
 
 ## Verification performed
 
-* **283 tests pass**, including every regression listed above.
+* **288 tests pass**, including every regression listed above.
 * **Production data validation**: 0 errors, 0 warnings on the live database;
   separately verified that it *does* report injected faults (duplicate
   fighters, an event completed before it starts, a prediction categorised as a

@@ -3,7 +3,7 @@
 Living status of UFC News Radar. Updated as work lands.
 
 **Last updated:** 2026-09-19
-**Test status:** ✅ 283 passed (`python -m pytest`)
+**Test status:** ✅ 288 passed (`python -m pytest`)
 **Data status:** ✅ `python scripts/validate_production_data.py` - 0 errors, 0 warnings
 **App status:** ✅ all 12 pages driven in Chromium; no exceptions, no console errors
 
@@ -101,7 +101,7 @@ the old test suite, because those tests only ever saw freshly built fixtures.
 - [x] 14 filters, 5 sort orders, polished first-run empty state, demo mode
 
 ### Quality
-- [x] 283 tests
+- [x] 288 tests
 - [x] Production data validator
 - [x] Whole app driven in Chromium at four viewport widths
 
