@@ -46,26 +46,45 @@ def render_list() -> None:
         fighters = [f for f in fighters if normalize_text(f["name"]) in watched]
 
     section_header("FIGHTERS", len(fighters))
-    for start in range(0, len(fighters), 4):
-        cols = st.columns(4)
-        for offset, fighter in enumerate(fighters[start:start + 4]):
-            with cols[offset]:
-                rank = ""
-                if fighter.get("is_champion"):
-                    rank = " · champion"
-                elif fighter.get("current_rank"):
-                    rank = f" · #{fighter['current_rank']}"
-                label = f"{fighter['name']}{rank}"
-                if st.button(label, key=f"fighter_btn_{fighter['id']}", width="stretch"):
+    if not fighters:
+        st.markdown('<div class="muted">No fighters match.</div>', unsafe_allow_html=True)
+        return
+    with st.container(horizontal=True, wrap=True, key="fighter_grid", gap="small"):
+        for fighter in fighters[:120]:
+            with st.container(width=200, key=f"fi_{fighter['id']}"):
+                st.markdown(_fighter_card_html(fighter), unsafe_allow_html=True)
+                if st.button("OPEN →", key=f"fighter_btn_{fighter['id']}", width="stretch"):
                     nav.open_fighter(fighter["name"])
-                st.markdown(
-                    f'<div class="muted" style="margin:-6px 0 10px 2px">'
-                    f'{fighter.get("mention_count") or 0} mentions'
-                    + (f' · last {humanize_age(fighter["last_mentioned_at"])}'
-                       if fighter.get("last_mentioned_at") else "")
-                    + "</div>",
-                    unsafe_allow_html=True,
-                )
+
+
+def _fighter_card_html(fighter: Dict[str, Any]) -> str:
+    """A fighter tile. Never another fighter's photo - an unrelated face would
+    be a factual claim the app has no basis for."""
+    from ui.cards import esc
+    from ui.images import image_for_fighter
+
+    image = image_for_fighter(fighter)
+    rank = ""
+    if fighter.get("is_champion"):
+        rank = '<span class="badge" style="background:#eab30822;color:#eab308;border:1px solid #eab30855">CHAMPION</span>'
+    elif fighter.get("current_rank") is not None:
+        rank = (f'<span class="badge" style="background:#3b82f622;color:#7fb0ff;'
+                f'border:1px solid #3b82f655">#{int(fighter["current_rank"])}</span>')
+    division = fighter.get("rank_division") or fighter.get("division") or ""
+    return (
+        f'<div class="ncard" style="border-radius:10px">'
+        f'<img src="{esc(image["url"])}" alt="{esc(image["caption"])}" '
+        f'style="width:100%;aspect-ratio:1/1;object-fit:cover" loading="lazy">'
+        f'<div class="body" style="padding:9px 10px;gap:4px">'
+        f'<div class="badges">{rank}</div>'
+        f'<h3 style="font-size:0.88rem">{esc(fighter["name"])}</h3>'
+        + (f'<div class="muted" style="font-size:0.7rem">{esc(division)}</div>' if division else "")
+        + f'<div class="muted" style="font-size:0.7rem">'
+        f'{int(fighter.get("mention_count") or 0)} mentions'
+        + (f' · {esc(humanize_age(fighter["last_mentioned_at"]))}'
+           if fighter.get("last_mentioned_at") else "")
+        + '</div></div></div>'
+    )
 
 
 def render_detail(name: str) -> None:
@@ -75,7 +94,14 @@ def render_detail(name: str) -> None:
         nav.go("fighters")
 
     nickname = f'"{fighter["nickname"]}"' if fighter and fighter.get("nickname") else ""
-    page_header(display_name.upper(), nickname)
+    header = st.columns([1, 4])
+    with header[0]:
+        from ui.images import image_for_fighter
+
+        image = image_for_fighter(fighter or {"name": display_name})
+        st.image(image["url"], caption=image["caption"], width="stretch")
+    with header[1]:
+        page_header(display_name.upper(), nickname)
 
     stories = stories_repo.stories_for_fighter(display_name, limit=60)
     ranking_rows = rankings_repo.fighter_ranking_history(display_name, limit=30)

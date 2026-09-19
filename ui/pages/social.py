@@ -16,7 +16,9 @@ from utils.timeutil import format_display, humanize_age
 
 
 def render() -> None:
-    page_header("X MONITORING", "Official X API only - no scraping, nothing simulated.")
+    page_header("\U0001F426 X / TWITTER RADAR",
+                "Official X API only - no scraping, nothing simulated. "
+                "Posts are social signals, not confirmed news.")
     status = x_status_panel()
 
     if not status["configured"]:
@@ -42,14 +44,17 @@ def render() -> None:
         unsafe_allow_html=True,
     )
 
-    tabs = st.tabs(["Collected posts", "Monitored accounts", "Planned queries", "API usage"])
+    tabs = st.tabs(["Radar", "All collected posts", "Monitored accounts",
+                    "Planned queries", "API usage"])
     with tabs[0]:
-        _render_posts()
+        _render_radar()
     with tabs[1]:
-        _render_accounts()
+        _render_posts()
     with tabs[2]:
-        _render_queries()
+        _render_accounts()
     with tabs[3]:
+        _render_queries()
+    with tabs[4]:
         _render_usage(status)
 
 
@@ -176,3 +181,112 @@ def _render_usage(status) -> None:
         for row in rows
     ])
     st.dataframe(frame, width="stretch", hide_index=True)
+
+
+# ------------------------------------------------------------- the radar ---
+#: Account types grouped the way a creator actually scans them.
+_JOURNALIST_TYPES = {"ESTABLISHED_JOURNALIST", "TRUSTED_REPORTER", "MAJOR_NEWS", "INSIDER"}
+_FIGHTER_TYPES = {"FIGHTER", "COACH_TEAM", "PROMOTER"}
+
+
+def _post_card(post: dict) -> str:
+    """One post, always labelled as a signal rather than as news."""
+    from models.types import status_badge
+    from ui.cards import esc
+
+    account_type = str(post.get("account_type") or "UNKNOWN")
+    colour = {"OFFICIAL": "#19c37d", "ESTABLISHED_JOURNALIST": "#3b82f6",
+              "TRUSTED_REPORTER": "#3b82f6", "MAJOR_NEWS": "#3b82f6",
+              "FIGHTER": "#0ea5e9", "COACH_TEAM": "#0ea5e9", "PROMOTER": "#eab308",
+              "INSIDER": "#a855f7", "FAN_ACCOUNT": "#9aa4b2"}.get(account_type, "#9aa4b2")
+    metrics = []
+    if post.get("like_count") is not None:
+        metrics.append(f"{post['like_count']} likes")
+    if post.get("repost_count") is not None:
+        metrics.append(f"{post['repost_count']} reposts")
+    entities = [name for name in (post.get("fighters") or [])[:2]]
+    entities += [name for name in (post.get("events") or [])[:1]]
+    link = (f'<a href="{esc(post.get("url"))}" target="_blank" rel="noopener noreferrer">'
+            'Open on X</a>' if post.get("url") else "")
+    return (
+        f'<div class="panel" style="border-left:3px solid {colour};padding:10px 13px">'
+        f'<div class="badges" style="margin-bottom:5px">'
+        f'<span class="badge" style="background:{colour}22;color:{colour};'
+        f'border:1px solid {colour}55">{esc(account_type.replace("_", " "))}</span>'
+        f'<span class="badge" style="background:#9aa4b222;color:#9aa4b2;'
+        f'border:1px solid #9aa4b255">SOCIAL SIGNAL</span></div>'
+        f'<div class="muted">@{esc(post.get("username"))} · '
+        f'{esc(humanize_age(post.get("created_at_source")))}'
+        + (f' · {esc(" · ".join(metrics))}' if metrics else "") + '</div>'
+        f'<div class="kv">{esc(truncate(post.get("text"), 260))}</div>'
+        + (f'<div class="muted">{esc(" · ".join(entities))}</div>' if entities else "")
+        + (f'<div style="margin-top:4px">{link}</div>' if link else "")
+        + '</div>'
+    )
+
+
+def _signal_section(title: str, note: str, posts: list, empty: str) -> None:
+    section_header(title, len(posts), note)
+    if not posts:
+        st.markdown(f'<div class="muted">{empty}</div>', unsafe_allow_html=True)
+        return
+    with st.container(horizontal=True, wrap=True, gap="small"):
+        for post in posts[:6]:
+            with st.container(width=330):
+                st.markdown(_post_card(post), unsafe_allow_html=True)
+
+
+def _render_radar() -> None:
+    """The X feed grouped the way it gets used, not one flat list."""
+    columns = st.columns([1, 3])
+    if columns[0].button("Collect from X now", key="radar_collect",
+                         disabled=not x_status_panel()["configured"], width="stretch"):
+        with st.spinner("Calling the X API..."):
+            outcome = collect_x_activity()
+        st.success(outcome.status_line)
+        for note in outcome.notes + outcome.errors:
+            st.caption(note)
+
+    posts = social_repo.recent_posts(hours=24 * 7, limit=300)
+    if not posts:
+        st.markdown(
+            '<div class="emptystate"><div class="big">NO X POSTS COLLECTED</div>'
+            '<div class="sub">X monitoring needs a bearer token, and collection only ever '
+            'uses the official API. Nothing on this page is ever simulated.</div></div>',
+            unsafe_allow_html=True)
+        return
+
+    def of_type(types: set) -> list:
+        return [post for post in posts
+                if str(post.get("account_type") or "").upper() in types]
+
+    official = of_type({"OFFICIAL"})
+    journalists = of_type(_JOURNALIST_TYPES)
+    fighters = of_type(_FIGHTER_TYPES)
+    rumors = [post for post in posts
+              if float(post.get("speculation_score") or 0) >= 0.34
+              or str(post.get("category") or "") == "rumor"]
+    engaged = sorted(
+        [post for post in posts if post.get("like_count") is not None],
+        key=lambda post: int(post.get("like_count") or 0), reverse=True)
+
+    _signal_section(
+        "\U0001F525 BREAKING SIGNALS",
+        "Official accounts first - the only ones whose own posts can confirm anything.",
+        official, "No posts from official accounts in the last week.")
+    _signal_section(
+        "\U0001F9D1\u200D\U0001F4BB JOURNALISTS / REPORTERS",
+        "Credible reporting. Still reporting, not confirmation.",
+        journalists, "No journalist posts collected.")
+    _signal_section(
+        "\U0001F94A FIGHTER POSTS",
+        "A fighter's own words. Their claim, not an independent source.",
+        fighters, "No fighter posts collected.")
+    _signal_section(
+        "\U0001F534 RUMORS",
+        "Speculative wording. Repetition by many accounts never upgrades a rumour.",
+        rumors, "No speculative posts collected.")
+    _signal_section(
+        "\U0001F4C8 TRENDING DISCUSSIONS",
+        "Ordered by the engagement the API actually returned. Engagement is not evidence.",
+        engaged, "No engagement metrics were returned for the collected posts.")
