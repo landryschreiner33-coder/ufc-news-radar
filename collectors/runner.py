@@ -56,6 +56,7 @@ class RunResult:
     card_changes: int = 0
     rankings: Optional[SnapshotResult] = None
     events_seen: int = 0
+    official_bouts: int = 0
     outcomes: List[SourceOutcome] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
@@ -109,6 +110,22 @@ def run_collection(
             result.events_seen += _store_events(collector_result)
 
     result.articles_seen = len(collected_articles)
+
+    # Official fight cards for the next few events. Bounded to a handful of
+    # requests per run, and never fatal: a layout change shows up on Source
+    # health rather than losing the whole collection.
+    if settings_repo.get_bool("collect_official_cards", True):
+        try:
+            from collectors.ufc_event_card import collect_official_cards
+
+            upcoming = entities_repo.list_events(limit=6, upcoming_only=True)
+            outcome = collect_official_cards(
+                [event for event in upcoming if event.get("ufc_url")], client=client)
+            result.official_bouts = outcome["stored"]
+            if outcome["errors"]:
+                result.errors.extend(outcome["errors"][:3])
+        except Exception as exc:
+            logger.warning("Official card collection failed: %s", exc)
 
     if collect_social:
         try:
@@ -201,17 +218,41 @@ def _store_events(collector_result: CollectorResult) -> int:
     stored = 0
     for event in collector_result.items:
         try:
-            entities_repo.upsert_event(
+            event_id = entities_repo.upsert_event(
                 name=event.get("name"),
                 event_date=event.get("event_date"),
                 location=event.get("location"),
+                city=event.get("city"),
+                venue=event.get("venue"),
                 ufc_url=event.get("ufc_url"),
-                data_origin="collected",
+                official_event_id=event.get("official_event_id"),
+                scheduled_start_utc=event.get("scheduled_start_utc"),
+                scheduled_end_utc=event.get("scheduled_end_utc"),
+                local_timezone=event.get("local_timezone"),
+                image_url=event.get("image_url"),
+                official_source_url=event.get("official_source_url"),
+                data_origin=event.get("data_origin") or "collected",
             )
+            # Give the event a lifecycle status immediately, so a freshly
+            # collected card is never left looking finished or unknown.
+            if event_id:
+                _refresh_event_status(event_id)
             stored += 1
         except Exception as exc:
             logger.debug("Could not store event %s: %s", event.get("name"), exc)
     return stored
+
+
+def _refresh_event_status(event_id: int) -> None:
+    """Recompute one event's lifecycle from its schedule (never the calendar)."""
+    try:
+        from processors.event_reconcile import reconcile_event
+
+        event = entities_repo.get_event(event_id)
+        if event:
+            reconcile_event(event)
+    except Exception as exc:  # pragma: no cover - status must not fail a run
+        logger.debug("Could not refresh status for event %s: %s", event_id, exc)
 
 
 def _collect_social() -> int:

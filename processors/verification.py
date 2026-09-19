@@ -57,6 +57,8 @@ class VerificationResult:
     derivative_count: int = 0
     has_conflict: bool = False
     conflict_notes: List[str] = field(default_factory=list)
+    #: Reliable sources on both sides - the CONTESTED trigger.
+    credible_disagreement: bool = False
     is_developing: bool = False
     speculation_score: float = 0.0
     evidence: List[SourceEvidence] = field(default_factory=list)
@@ -100,9 +102,10 @@ def evaluate_story(
     result.independent_source_count = len(independent_groups)
 
     result.speculation_score = _average_speculation(articles)
-    conflict, conflict_notes = _detect_conflicts(articles, social_posts)
+    conflict, conflict_notes, credible_disagreement = _detect_conflicts(articles, social_posts)
     result.has_conflict = conflict
     result.conflict_notes = conflict_notes
+    result.credible_disagreement = credible_disagreement
     result.is_developing = _is_developing(story, articles, social_posts, conflict)
     if result.official_confirmed and not conflict:
         # An officially confirmed story with no dispute is settled, not moving.
@@ -177,37 +180,74 @@ def _average_speculation(articles: List[Dict[str, Any]]) -> float:
     return round(sum(scores) / len(scores), 3) if scores else 0.0
 
 
+#: Source types whose disagreement is worth calling CONTESTED. Two fan
+#: accounts contradicting each other is noise, not a contested story.
+CREDIBLE_FOR_CONFLICT = {
+    SourceType.OFFICIAL.value,
+    SourceType.MAJOR_NEWS.value,
+    SourceType.ESTABLISHED_JOURNALIST.value,
+    SourceType.TRUSTED_REPORTER.value,
+}
+
+
 def _detect_conflicts(
     articles: List[Dict[str, Any]], social_posts: List[Dict[str, Any]]
-) -> Tuple[bool, List[str]]:
-    """Look for denials/contradictions. Disagreement is preserved, not resolved."""
+) -> Tuple[bool, List[str], bool]:
+    """Look for denials/contradictions. Disagreement is preserved, not resolved.
+
+    Returns (has_conflict, notes, credible_disagreement).  The third value is
+    True only when *both* sides of the disagreement include a source trusted to
+    report accurately - that is what earns the CONTESTED status, as opposed to
+    a story that is merely still moving.
+    """
     notes: List[str] = []
     denial_sources: List[str] = []
     confirm_sources: List[str] = []
+    credible_denials = credible_confirms = 0
+
     for article in articles:
         text = f"{article.get('title') or ''} {article.get('excerpt') or ''} {article.get('content_snippet') or ''}"
         haystack = normalize_text(text)
+        credible = normalize_source_type(article.get("source_type")) in CREDIBLE_FOR_CONFLICT
         if any(normalize_text(term) in haystack for term in DENIAL_TERMS):
             denial_sources.append(str(article.get("source_name") or "a source"))
-        elif classify_text(article.get("title") or "", article.get("excerpt") or "").has_official_language:
-            confirm_sources.append(str(article.get("source_name") or "a source"))
+            credible_denials += 1 if credible else 0
+        else:
+            # Anything credible that is not a denial is asserting the claim, so
+            # it sits on the other side of the disagreement. Restricting this to
+            # official wording would miss the ordinary case of one outlet
+            # reporting something and another reporting a denial of it.
+            if credible:
+                credible_confirms += 1
+            if classify_text(article.get("title") or "",
+                             article.get("excerpt") or "").has_official_language:
+                confirm_sources.append(str(article.get("source_name") or "a source"))
     for post in social_posts:
         haystack = normalize_text(post.get("text") or "")
         if any(normalize_text(term) in haystack for term in DENIAL_TERMS):
             denial_sources.append(f"@{post.get('username') or 'unknown'}")
+            if normalize_source_type(post.get("account_type")) in CREDIBLE_FOR_CONFLICT:
+                credible_denials += 1
+
+    credible_disagreement = bool(credible_denials and credible_confirms)
     if denial_sources and (confirm_sources or len(denial_sources) < len(articles)):
         notes.append(
             "Sources disagree: "
             + ", ".join(sorted(set(denial_sources))[:3])
             + " dispute or deny what other sources report."
         )
-        return True, notes
+        if credible_disagreement:
+            notes.append(
+                "Both sides of this disagreement include sources normally considered "
+                "reliable, so the app does not pick a version. Check both before reporting."
+            )
+        return True, notes, credible_disagreement
     if denial_sources:
         notes.append(
             "A denial was published by " + ", ".join(sorted(set(denial_sources))[:3]) + "."
         )
-        return True, notes
-    return False, notes
+        return True, notes, False
+    return False, notes, False
 
 
 def _is_developing(
@@ -278,6 +318,10 @@ def _decide_status(
 
     if result.official_confirmed and not result.has_conflict:
         return StoryStatus.CONFIRMED.value
+    # Reliable sources contradicting each other is its own state. The app shows
+    # both versions and never silently chooses one.
+    if result.has_conflict and result.credible_disagreement:
+        return StoryStatus.CONTESTED.value
     if result.official_confirmed and result.has_conflict:
         return StoryStatus.DEVELOPING.value
     # DEVELOPING needs a credible source behind it. Low-quality accounts

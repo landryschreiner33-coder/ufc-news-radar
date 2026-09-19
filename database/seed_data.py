@@ -548,6 +548,7 @@ DEFAULT_SETTINGS: List[tuple] = [
     ("story_title_similarity_threshold", "0.62", "float"),
     ("feed_max_stories", "60", "int"),
     ("article_fetch_full_text", "1", "bool"),
+    ("collect_official_cards", "1", "bool"),
     ("article_fetch_limit_per_run", "12", "int"),
     ("x_enabled", "1", "bool"),
     ("x_search_enabled", "1", "bool"),

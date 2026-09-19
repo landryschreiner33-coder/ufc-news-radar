@@ -77,8 +77,13 @@ def test_run_collects_rankings_and_events():
     assert rankings_repo.divisions()
     events = entities_repo.list_events(limit=20)
     assert any(event["name"].startswith("UFC 320") for event in events)
-    collected = [event for event in events if event["data_origin"] == "collected"]
+    # UFC.com is the official schedule, so its rows carry the strongest origin.
+    collected = [event for event in events if event["data_origin"] == "official"]
     assert collected and collected[0]["location"]
+    # The official page publishes segment start times, which the lifecycle needs.
+    dated = [event for event in collected if event.get("scheduled_start_utc")]
+    assert dated, "a collected event should carry its scheduled start"
+    assert dated[0]["event_status"] in ("UPCOMING", "LIVE", "COMPLETED", "UNKNOWN")
 
 
 def test_card_changes_are_detected_from_reporting():

@@ -67,23 +67,23 @@ def _parse_event_cards(soup: BeautifulSoup, base_url: str) -> List[Dict[str, Any
         name = _event_name(slug, headline)
         if not name:
             continue
-        date_el = card.select_one("[data-main-card-timestamp], .c-card-event--result__date, [class*='__date']")
-        event_date = None
-        if date_el is not None:
-            timestamp = date_el.get("data-main-card-timestamp") or date_el.get("data-prelims-card-timestamp")
-            if timestamp:
-                event_date = _from_timestamp(timestamp)
-            if not event_date:
-                event_date = _from_text(date_el.get_text(" ", strip=True))
+        schedule = _parse_schedule(card)
         location_el = card.select_one(".c-card-event--result__location, [class*='__location'], .field--name-taxonomy-term-title")
         location = collapse_whitespace(location_el.get_text(" ", strip=True)) if location_el else None
         events.append({
             "name": name,
             "headline": headline,
-            "event_date": event_date,
+            "event_date": schedule["event_date"],
+            "scheduled_start_utc": schedule["scheduled_start_utc"],
+            "scheduled_end_utc": schedule["scheduled_end_utc"],
+            "local_timezone": schedule["local_timezone"],
             "location": location,
+            "city": _city_from_location(location),
+            "official_event_id": _official_id(card),
             "ufc_url": _absolute(href, base_url),
-            "data_origin": "collected",
+            "official_source_url": _absolute(href, base_url),
+            "image_url": _card_image(card),
+            "data_origin": "official",
             "collected_at": utcnow_iso(),
         })
     return _dedupe(events)
@@ -107,9 +107,16 @@ def _parse_event_links(soup: BeautifulSoup, base_url: str) -> List[Dict[str, Any
             "name": name,
             "headline": headline,
             "event_date": _from_text(container_text),
+            "scheduled_start_utc": None,
+            "scheduled_end_utc": None,
+            "local_timezone": None,
             "location": None,
+            "city": None,
+            "official_event_id": None,
             "ufc_url": _absolute(href, base_url),
-            "data_origin": "collected",
+            "official_source_url": _absolute(href, base_url),
+            "image_url": None,
+            "data_origin": "official",
             "collected_at": utcnow_iso(),
         })
     return _dedupe(events)
@@ -178,3 +185,113 @@ def _dedupe(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         seen.add(key)
         output.append(event)
     return output
+
+
+# --------------------------------------------------------------- schedule --
+#: UFC publishes each segment's start as a unix timestamp. The earliest one is
+#: when the event actually begins; the main card start is the headline time.
+_TIMESTAMP_ATTRS = (
+    "data-early-prelims-card-timestamp",
+    "data-prelims-card-timestamp",
+    "data-main-card-timestamp",
+)
+
+#: Broadcast abbreviations -> IANA zones, so a local start time can be shown
+#: in the venue's own timezone rather than silently in UTC.
+_TZ_ABBREVIATIONS = {
+    "ET": "America/New_York", "EDT": "America/New_York", "EST": "America/New_York",
+    "CT": "America/Chicago", "CDT": "America/Chicago", "CST": "America/Chicago",
+    "MT": "America/Denver", "MDT": "America/Denver", "MST": "America/Denver",
+    "PT": "America/Los_Angeles", "PDT": "America/Los_Angeles", "PST": "America/Los_Angeles",
+    "BST": "Europe/London", "GMT": "Europe/London", "CET": "Europe/Paris",
+    "CEST": "Europe/Paris", "AEST": "Australia/Sydney", "AEDT": "Australia/Sydney",
+    "GST": "Asia/Dubai", "AST": "Asia/Riyadh", "SGT": "Asia/Singapore",
+    "JST": "Asia/Tokyo", "BRT": "America/Sao_Paulo",
+}
+
+_TZ_RE = re.compile(r"\b(" + "|".join(sorted(_TZ_ABBREVIATIONS, key=len, reverse=True)) + r")\b")
+
+#: A UFC card runs roughly seven hours from the first prelim.
+_EVENT_DURATION_HOURS = 7
+
+
+def _parse_schedule(card: Any) -> Dict[str, Any]:
+    """Start/end/timezone/date from the event card's own timestamps.
+
+    Falls back to the printed date when no timestamp is published; in that case
+    ``scheduled_start_utc`` stays None and the lifecycle refuses to guess
+    whether the event has started.
+    """
+    from datetime import timedelta
+
+    starts: List[str] = []
+    for element in card.select("[" + "], [".join(_TIMESTAMP_ATTRS) + "]"):
+        for attribute in _TIMESTAMP_ATTRS:
+            value = element.get(attribute)
+            if value:
+                parsed = _from_timestamp(value)
+                if parsed:
+                    starts.append(parsed)
+    date_el = card.select_one(
+        "[data-main-card-timestamp], .c-card-event--result__date, [class*='__date']")
+    text = date_el.get_text(" ", strip=True) if date_el is not None else ""
+
+    start = min(starts) if starts else None
+    end = None
+    if start:
+        parsed = parse_iso(start)
+        if parsed:
+            end = to_iso(parsed + timedelta(hours=_EVENT_DURATION_HOURS))
+
+    event_date = None
+    if start:
+        event_date = start[:10]
+    elif text:
+        printed = _from_text(text)
+        event_date = printed[:10] if printed else None
+
+    zone = None
+    match = _TZ_RE.search(text or "")
+    if match:
+        zone = _TZ_ABBREVIATIONS.get(match.group(1))
+
+    return {
+        "event_date": event_date,
+        "scheduled_start_utc": start,
+        "scheduled_end_utc": end,
+        "local_timezone": zone,
+    }
+
+
+def _official_id(card: Any) -> Optional[str]:
+    """UFC's own numeric id when the markup exposes it."""
+    for attribute in ("data-event-id", "data-nid", "data-node-id"):
+        value = card.get(attribute)
+        if value:
+            return str(value).strip()
+    node = card.select_one("[data-event-id], [data-nid]")
+    if node is not None:
+        return str(node.get("data-event-id") or node.get("data-nid") or "").strip() or None
+    return None
+
+
+def _card_image(card: Any) -> Optional[str]:
+    image = card.select_one("img[src], img[data-src]")
+    if image is None:
+        return None
+    source = image.get("src") or image.get("data-src") or ""
+    if not source:
+        return None
+    return source if source.startswith("http") else "https://www.ufc.com" + source
+
+
+def _city_from_location(location: Optional[str]) -> Optional[str]:
+    """'T-Mobile Arena, Las Vegas, Nevada' -> 'Las Vegas, Nevada'."""
+    if not location:
+        return None
+    parts = [part.strip() for part in str(location).split(",") if part.strip()]
+    if len(parts) >= 3:
+        return ", ".join(parts[1:])
+    if len(parts) == 2:
+        return parts[1]
+    return parts[0] if parts else None

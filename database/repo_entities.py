@@ -343,8 +343,14 @@ def upsert_fight(
     source_url: Optional[str] = None,
     source_name: Optional[str] = None,
     is_demo: bool = False,
+    official_status: Optional[str] = None,
 ) -> tuple:
-    """Insert or update one bout. Returns (fight_id, created?, changes[])."""
+    """Insert or update one bout. Returns (fight_id, created?, changes[]).
+
+    ``official_status`` records whether UFC itself lists this bout, which is
+    what keeps an officially announced fight visually separate from one that
+    has only been reported or rumoured.
+    """
     now = utcnow_iso()
     key = pair_key_for(fighter_a, fighter_b)
     existing = query_one(
@@ -353,11 +359,14 @@ def upsert_fight(
     if existing is None:
         fight_id = execute(
             "INSERT INTO fight_card_items (event_id, fighter_a, fighter_b, pair_key, weight_class, "
-            "is_title_fight, segment, bout_order, status, confidence, source_article_id, source_story_id, "
+            "is_title_fight, segment, bout_order, status, confidence, official_status, "
+            "canonical_fighter_a, canonical_fighter_b, source_article_id, source_story_id, "
             "source_url, source_name, first_seen_at, last_updated_at, is_demo) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (event_id, fighter_a, fighter_b, key, weight_class, 1 if is_title_fight else 0, segment,
-             bout_order, status, confidence, source_article_id, source_story_id, source_url, source_name,
+             bout_order, status, confidence, official_status or confidence,
+             normalize_text(fighter_a), normalize_text(fighter_b),
+             source_article_id, source_story_id, source_url, source_name,
              now, now, 1 if is_demo else 0),
         )
         return fight_id, True, []
@@ -385,7 +394,15 @@ def upsert_fight(
                 "before_text": existing["segment"], "after_text": segment,
             })
     if confidence == "official" and existing["confidence"] != "official":
+        # UFC's own card takes over from reporting, and the upgrade is logged
+        # so the change history shows when a reported bout became official.
         updates["confidence"] = "official"
+        updates["official_status"] = "official"
+        changes.append({"change_type": "status_change",
+                        "before_text": f"reported ({existing['confidence']})",
+                        "after_text": "official (listed by UFC)"})
+    elif official_status and official_status != (existing["official_status"] or ""):
+        updates["official_status"] = official_status
     if bout_order is not None and bout_order != existing["bout_order"]:
         updates["bout_order"] = bout_order
     if updates:

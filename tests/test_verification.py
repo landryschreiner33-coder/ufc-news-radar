@@ -101,7 +101,9 @@ def test_conflict_is_preserved_not_resolved(ingest, make_article):
                      excerpt="He disputes the report and calls it false."),
     ])
     assert story["has_conflict"] == 1
-    assert story["status"] == StoryStatus.DEVELOPING.value
+    # Two reliable outlets flatly contradict each other, which is CONTESTED:
+    # the app shows both versions rather than picking one.
+    assert story["status"] == StoryStatus.CONTESTED.value
     assert story["conflict_notes"]
     assert story["support_label"].startswith("CONTESTED")
 
@@ -138,3 +140,31 @@ def test_evaluate_story_with_no_sources_is_unverified():
     verdict = evaluate_story(stories_repo.get_story(story_id), [], [])
     assert verdict.status == StoryStatus.UNVERIFIED.value
     assert verdict.reasons
+
+
+def test_two_low_quality_accounts_disagreeing_is_not_contested(ingest, make_article):
+    """Noise between unreliable sources must not be dressed up as a real dispute."""
+    story = _story_after(ingest, [
+        make_article(title="Fighter X out of UFC 320, says account", source_name="Fan Blog A",
+                     source_type="FAN_ACCOUNT", reliability_weight=0.2,
+                     independence_group="fan_a", published_at=hours_ago(3)),
+        make_article(title="Fighter X denies he is out of UFC 320", source_name="Fan Blog B",
+                     source_type="FAN_ACCOUNT", reliability_weight=0.2,
+                     independence_group="fan_b", published_at=hours_ago(2),
+                     excerpt="The claim is disputed."),
+    ])
+    assert story["status"] != StoryStatus.CONTESTED.value
+
+
+def test_contested_stories_explain_both_sides(ingest, make_article):
+    story = _story_after(ingest, [
+        make_article(title="Report: Fighter Y withdraws from UFC 331", source_name="ESPN",
+                     independence_group="espn", published_at=hours_ago(3),
+                     excerpt="He is out of the bout, sources say."),
+        make_article(title="Fighter Y denies withdrawing from UFC 331", source_name="MMA Fighting",
+                     independence_group="vox_sbnation", published_at=hours_ago(2),
+                     excerpt="He disputes the report and calls it false."),
+    ])
+    assert story["status"] == StoryStatus.CONTESTED.value
+    notes = " ".join(story["conflict_notes"])
+    assert "does not pick a version" in notes
