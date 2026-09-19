@@ -18,6 +18,7 @@ class StoryStatus(str, Enum):
     RUMOR = "RUMOR"
     UNVERIFIED = "UNVERIFIED"
     FIGHTER_CLAIM = "FIGHTER_CLAIM"
+    CONTESTED = "CONTESTED"
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,10 @@ STATUS_STYLES: Dict[str, StatusStyle] = {
     StoryStatus.FIGHTER_CLAIM: StatusStyle(
         "\U0001F535", "FIGHTER CLAIM", "#3b82f6",
         "A fighter, coach or team is making the claim. It is their word, not confirmation.",
+    ),
+    StoryStatus.CONTESTED: StatusStyle(
+        "\U0001F7E3", "CONTESTED", "#a855f7",
+        "Reliable sources disagree. Both versions are shown; the app does not pick one.",
     ),
 }
 
@@ -234,3 +239,106 @@ FILTER_TO_CATEGORY: Dict[str, str] = {
 SORT_OPTIONS: List[str] = [
     "Newest", "Most Relevant", "Most Sources", "Most Discussed", "Recently Updated",
 ]
+
+
+# -------------------------------------------------------- event lifecycle --
+class EventStatus(str, Enum):
+    """Where a UFC event is in its life.
+
+    Deliberately *not* derived from the date alone.  An event is only
+    COMPLETED once something authoritative says it finished; a date that has
+    passed with no such evidence leaves the event UNKNOWN rather than
+    inventing a result.
+    """
+
+    UPCOMING = "UPCOMING"
+    LIVE = "LIVE"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+    POSTPONED = "POSTPONED"
+    UNKNOWN = "UNKNOWN"
+
+
+EVENT_STATUS_STYLES: Dict[str, StatusStyle] = {
+    EventStatus.UPCOMING: StatusStyle(
+        "\U0001F4C5", "UPCOMING", "#3b82f6",
+        "Scheduled. The start time collected from the official schedule is still in the future.",
+    ),
+    EventStatus.LIVE: StatusStyle(
+        "\U0001F534", "LIVE NOW", "#ef4444",
+        "The scheduled start has passed and the event is inside its expected running window.",
+    ),
+    EventStatus.COMPLETED: StatusStyle(
+        "✅", "COMPLETED", "#19c37d",
+        "Reliable evidence was collected that this event finished.",
+    ),
+    EventStatus.CANCELLED: StatusStyle(
+        "\U0001F6AB", "CANCELLED", "#ef4444",
+        "Officially cancelled according to the collected sources.",
+    ),
+    EventStatus.POSTPONED: StatusStyle(
+        "⏸", "POSTPONED", "#ff9130",
+        "Officially postponed according to the collected sources.",
+    ),
+    EventStatus.UNKNOWN: StatusStyle(
+        "⚪", "STATUS UNKNOWN", "#9aa4b2",
+        "Not enough evidence to state this event's status. The app will not guess.",
+    ),
+}
+
+
+def event_status_style(status: Optional[str]) -> StatusStyle:
+    return EVENT_STATUS_STYLES.get(
+        str(status or "").upper(), EVENT_STATUS_STYLES[EventStatus.UNKNOWN]
+    )
+
+
+def event_status_badge(status: Optional[str]) -> str:
+    style = event_status_style(status)
+    return f"{style.emoji} {style.label}"
+
+
+#: How sure the app is about an event's status, and where that status came from.
+class StatusConfidence(str, Enum):
+    OFFICIAL = "OFFICIAL"      # straight from an official UFC page
+    REPORTED = "REPORTED"      # credible reporting, not official
+    DERIVED = "DERIVED"        # computed from an official schedule + the clock
+    LOW = "LOW"                # weak or single-source evidence
+
+
+# --------------------------------------------------------- article intent --
+class ArticleIntent(str, Enum):
+    """What an article is *doing* - the guard that stops a prediction piece
+    being read as a result.
+
+    Only RESULT and POST_FIGHT may ever contribute evidence that fights or
+    events have concluded.  PREVIEW and PREDICTION are explicitly forbidden
+    from doing so (see ``processors/result_safety.py``).
+    """
+
+    PREVIEW = "PREVIEW"
+    PREDICTION = "PREDICTION"
+    ANNOUNCEMENT = "ANNOUNCEMENT"
+    RESULT = "RESULT"
+    POST_FIGHT = "POST_FIGHT"
+    INTERVIEW = "INTERVIEW"
+    RUMOR = "RUMOR"
+    UNKNOWN = "UNKNOWN"
+
+
+INTENT_LABELS: Dict[str, str] = {
+    ArticleIntent.PREVIEW: "Preview",
+    ArticleIntent.PREDICTION: "Prediction / pick",
+    ArticleIntent.ANNOUNCEMENT: "Announcement",
+    ArticleIntent.RESULT: "Result",
+    ArticleIntent.POST_FIGHT: "Post-fight",
+    ArticleIntent.INTERVIEW: "Interview",
+    ArticleIntent.RUMOR: "Rumor",
+    ArticleIntent.UNKNOWN: "Unclassified",
+}
+
+#: Intents that are allowed to establish that a fight or event has concluded.
+RESULT_BEARING_INTENTS = {ArticleIntent.RESULT.value, ArticleIntent.POST_FIGHT.value}
+
+#: Intents that must NEVER establish a result, no matter what else they say.
+RESULT_FORBIDDEN_INTENTS = {ArticleIntent.PREVIEW.value, ArticleIntent.PREDICTION.value}

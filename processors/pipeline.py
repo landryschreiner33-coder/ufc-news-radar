@@ -49,6 +49,7 @@ class PipelineStats:
     stories_updated: int = 0
     social_linked: int = 0
     card_changes: int = 0
+    events_reconciled: int = 0
     errors: List[str] = field(default_factory=list)
 
     def merge(self, other: "PipelineStats") -> "PipelineStats":
@@ -58,6 +59,7 @@ class PipelineStats:
         self.stories_new += other.stories_new
         self.stories_updated += other.stories_updated
         self.social_linked += other.social_linked
+        self.events_reconciled += other.events_reconciled
         self.card_changes += other.card_changes
         self.errors.extend(other.errors)
         return self
@@ -344,5 +346,13 @@ def process_all(items: Optional[List[Dict[str, Any]]] = None) -> PipelineStats:
     ]
     recompute_stories(touched)
     stats.card_changes += detect_card_changes(touched[:120])
+    # Refresh every event's lifecycle status from the schedule + new evidence.
+    # Never derived from the calendar alone - see processors/event_lifecycle.py.
+    try:
+        from processors.event_reconcile import reconcile_all_events
+
+        stats.events_reconciled = reconcile_all_events().get("changed", 0)
+    except Exception:  # pragma: no cover - a status pass must not lose a run
+        logger.exception("Event reconciliation failed")
     settings_repo.set_setting("last_collection_at", utcnow_iso(), "str")
     return stats

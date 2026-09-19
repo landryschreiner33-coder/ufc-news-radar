@@ -7,7 +7,7 @@ from database.db import execute, json_dump, json_load, query_all, query_one, que
 from utils.textutil import canonical_url, domain_of, normalize_title, sha1, url_hash
 from utils.timeutil import hours_ago_iso, utcnow_iso
 
-JSON_FIELDS = ("fighters", "events", "keywords", "attribution_outlets")
+JSON_FIELDS = ("fighters", "events", "keywords", "attribution_outlets", "intent_reasons")
 
 
 def hydrate(row: Any) -> Optional[Dict[str, Any]]:
@@ -51,8 +51,8 @@ def insert_article(article: Dict[str, Any]) -> Optional[int]:
             "excerpt, content_snippet, content_chars, image_url, category, fighters, events, keywords, "
             "language, source_type, reliability_weight, independence_group, attribution_outlets, "
             "is_derivative, speculation_score, has_denial, is_official, story_id, is_demo, raw_json, "
-            "created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "intent, intent_reasons, event_occurred_at, updated_at_source, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 article.get("source_id"), article.get("source_key"), article.get("source_name"),
                 article.get("external_id"), url, canonical, hashed,
@@ -68,7 +68,9 @@ def insert_article(article: Dict[str, Any]) -> Optional[int]:
                 1 if article.get("is_derivative") else 0, float(article.get("speculation_score") or 0.0),
                 1 if article.get("has_denial") else 0,
                 1 if article.get("is_official") else 0, article.get("story_id"),
-                1 if article.get("is_demo") else 0, json_dump(article.get("raw_json")), now,
+                1 if article.get("is_demo") else 0, json_dump(article.get("raw_json")),
+                article.get("intent") or "UNKNOWN", json_dump(article.get("intent_reasons") or []),
+                article.get("event_occurred_at"), article.get("updated_at_source"), now,
             ),
         )
         return cursor.lastrowid
@@ -78,6 +80,7 @@ def update_article(article_id: int, **fields: Any) -> None:
     allowed = {
         "title", "normalized_title", "author", "published_at", "excerpt", "content_snippet",
         "content_chars", "image_url", "category", "fighters", "events", "keywords", "source_type",
+        "intent", "intent_reasons", "event_occurred_at", "updated_at_source",
         "reliability_weight", "independence_group", "attribution_outlets", "is_derivative",
         "speculation_score", "is_official", "story_id", "domain", "source_name",
     }

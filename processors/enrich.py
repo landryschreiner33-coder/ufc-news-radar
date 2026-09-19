@@ -9,8 +9,9 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from database import repo_settings as settings_repo
-from models.types import SourceType, normalize_source_type, reliability_for
+from models.types import Category, SourceType, normalize_source_type, reliability_for
 from processors.categorize import classify_text
+from processors.result_safety import classify_intent
 from processors.entities import find_events, find_fighters, find_weight_classes, get_fighter_index
 from utils.textutil import clean_title, domain_of, truncate
 
@@ -39,6 +40,18 @@ def enrich_article(item: Dict[str, Any], index: Optional[Any] = None) -> Dict[st
     item["has_denial"] = signals.has_denial
     keywords = list(dict.fromkeys(list(item.get("keywords") or []) + signals.keywords))
     item["keywords"] = keywords[:15]
+
+    # What the piece is *doing*. Guards results against preview/prediction
+    # coverage - see processors/result_safety.py.
+    intent = classify_intent(
+        item.get("title") or "",
+        f"{item.get('excerpt') or ''} {item.get('content_snippet') or ''}",
+    )
+    item["intent"] = intent.intent
+    item["intent_reasons"] = intent.reasons
+    if intent.intent in ("PREVIEW", "PREDICTION") and item.get("category") == Category.RESULT.value:
+        # The category rules saw result words; the intent rules know better.
+        item["category"] = Category.GENERAL.value
 
     item["fighters"] = find_fighters(text_for_analysis, index)
     known_events = [event for event in (item.get("events") or []) if event]

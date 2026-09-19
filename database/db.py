@@ -25,7 +25,7 @@ from utils.timeutil import utcnow_iso
 logger = get_logger(__name__)
 
 SCHEMA_FILE = PROJECT_ROOT / "database" / "schema.sql"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Future schema changes go here as (version, name, list-of-SQL-statements).
 # Version 1 is the base schema in schema.sql; a fresh database is created at
@@ -35,6 +35,47 @@ MIGRATIONS: List[tuple] = [
         2,
         "articles.has_denial",
         ["ALTER TABLE articles ADD COLUMN has_denial INTEGER NOT NULL DEFAULT 0"],
+    ),
+    (
+        3,
+        "event lifecycle, canonical identity and article intent",
+        [
+            # -- events: lifecycle + canonical identity ---------------------
+            "ALTER TABLE events ADD COLUMN canonical_key TEXT",
+            "ALTER TABLE events ADD COLUMN official_event_id TEXT",
+            "ALTER TABLE events ADD COLUMN scheduled_start_utc TEXT",
+            "ALTER TABLE events ADD COLUMN scheduled_end_utc TEXT",
+            "ALTER TABLE events ADD COLUMN local_timezone TEXT",
+            "ALTER TABLE events ADD COLUMN city TEXT",
+            "ALTER TABLE events ADD COLUMN event_status TEXT NOT NULL DEFAULT 'UNKNOWN'",
+            "ALTER TABLE events ADD COLUMN status_source TEXT",
+            "ALTER TABLE events ADD COLUMN status_confidence TEXT",
+            "ALTER TABLE events ADD COLUMN status_updated_at TEXT",
+            "ALTER TABLE events ADD COLUMN status_reasons TEXT",
+            "ALTER TABLE events ADD COLUMN status_conflicts TEXT",
+            "ALTER TABLE events ADD COLUMN official_source_url TEXT",
+            "ALTER TABLE events ADD COLUMN image_url TEXT",
+            "ALTER TABLE events ADD COLUMN merged_into_id INTEGER",
+            """CREATE TABLE IF NOT EXISTS event_aliases (
+                   id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                   event_id    INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+                   alias_key   TEXT    NOT NULL UNIQUE,
+                   alias_name  TEXT,
+                   created_at  TEXT    NOT NULL
+               )""",
+            "CREATE INDEX IF NOT EXISTS idx_event_aliases_event ON event_aliases(event_id)",
+            "CREATE INDEX IF NOT EXISTS idx_events_status ON events(event_status)",
+            "CREATE INDEX IF NOT EXISTS idx_events_start ON events(scheduled_start_utc)",
+            # -- articles: what the piece is actually doing ------------------
+            "ALTER TABLE articles ADD COLUMN intent TEXT NOT NULL DEFAULT 'UNKNOWN'",
+            "ALTER TABLE articles ADD COLUMN intent_reasons TEXT",
+            "ALTER TABLE articles ADD COLUMN event_occurred_at TEXT",
+            "ALTER TABLE articles ADD COLUMN updated_at_source TEXT",
+            # -- fight cards: official vs reported separation ----------------
+            "ALTER TABLE fight_card_items ADD COLUMN official_status TEXT NOT NULL DEFAULT 'reported'",
+            "ALTER TABLE fight_card_items ADD COLUMN canonical_fighter_a TEXT",
+            "ALTER TABLE fight_card_items ADD COLUMN canonical_fighter_b TEXT",
+        ],
     ),
 ]
 
@@ -208,6 +249,16 @@ def apply_migrations(connection: Optional[sqlite3.Connection] = None) -> List[in
     return applied
 
 
+def _backfill_event_identity(connection: sqlite3.Connection) -> None:
+    """Canonical event keys + duplicate merging (idempotent, never fatal)."""
+    try:
+        from database.event_migration import backfill
+
+        backfill(connection)
+    except Exception:  # pragma: no cover - data repair must never block startup
+        logger.exception("Event identity backfill failed; continuing without it")
+
+
 def init_db(seed: bool = True, force_schema: bool = False) -> sqlite3.Connection:
     """Create the database if needed, apply migrations and seed reference rows.
 
@@ -226,6 +277,7 @@ def init_db(seed: bool = True, force_schema: bool = False) -> sqlite3.Connection
     else:
         apply_schema(connection)  # CREATE TABLE IF NOT EXISTS - adds new tables
         apply_migrations(connection)
+    _backfill_event_identity(connection)
     if seed:
         from database import seed as seed_module
 

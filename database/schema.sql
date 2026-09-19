@@ -72,20 +72,46 @@ CREATE INDEX IF NOT EXISTS idx_fighters_mentions ON fighters(mention_count DESC)
 CREATE TABLE IF NOT EXISTS events (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     name              TEXT    NOT NULL,
-    normalized_name   TEXT    NOT NULL UNIQUE,
+    normalized_name   TEXT    NOT NULL,
+    canonical_key     TEXT    NOT NULL UNIQUE,   -- stable identity (see processors/event_identity.py)
+    official_event_id TEXT,                      -- UFC's own event id when collected
     short_name        TEXT,
-    event_date        TEXT,
+    event_date        TEXT,                      -- calendar day, may lack a time
+    scheduled_start_utc TEXT,                    -- first bout, UTC, when collected
+    scheduled_end_utc   TEXT,                    -- when collected; otherwise derived for display
+    local_timezone    TEXT,                      -- IANA zone of the venue, e.g. America/Los_Angeles
     location          TEXT,
+    city              TEXT,
     venue             TEXT,
-    status            TEXT    NOT NULL DEFAULT 'scheduled', -- scheduled|completed|cancelled|unknown
+    -- Lifecycle. NEVER derived from the calendar alone; see processors/event_lifecycle.py
+    event_status      TEXT    NOT NULL DEFAULT 'UNKNOWN', -- UPCOMING|LIVE|COMPLETED|CANCELLED|POSTPONED|UNKNOWN
+    status_source     TEXT,                      -- who/what established the status
+    status_confidence TEXT,                      -- OFFICIAL|REPORTED|DERIVED|LOW
+    status_updated_at TEXT,
+    status_reasons    TEXT,                      -- JSON array, always shown with the status
+    status_conflicts  TEXT,                      -- JSON array of preserved disagreements
+    official_source_url TEXT,
     ufc_url           TEXT,
     source_url        TEXT,
-    data_origin       TEXT    NOT NULL DEFAULT 'detected',  -- collected|detected|user
+    image_url         TEXT,
+    data_origin       TEXT    NOT NULL DEFAULT 'detected',  -- official|collected|detected|user
+    merged_into_id    INTEGER REFERENCES events(id) ON DELETE SET NULL,
     mention_count     INTEGER NOT NULL DEFAULT 0,
     last_mentioned_at TEXT,
     is_demo           INTEGER NOT NULL DEFAULT 0,
     created_at        TEXT    NOT NULL,
     updated_at        TEXT    NOT NULL
+);
+
+-- Alternate identities one event answers to ("UFC 331" / the dated slug / the
+-- headline matchup).  Lets an incoming mention find an existing event instead
+-- of creating a duplicate row.
+CREATE TABLE IF NOT EXISTS event_aliases (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id    INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    alias_key   TEXT    NOT NULL UNIQUE,
+    alias_name  TEXT,
+    created_at  TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_date ON events(event_date);
 
@@ -169,6 +195,12 @@ CREATE TABLE IF NOT EXISTS articles (
     is_derivative       INTEGER NOT NULL DEFAULT 0,
     speculation_score   REAL    NOT NULL DEFAULT 0,
     has_denial          INTEGER NOT NULL DEFAULT 0,
+    -- What the piece is doing. PREVIEW/PREDICTION may never create a result;
+    -- see processors/result_safety.py.
+    intent              TEXT    NOT NULL DEFAULT 'UNKNOWN',
+    intent_reasons      TEXT,               -- JSON array
+    event_occurred_at   TEXT,               -- when the reported event happened
+    updated_at_source   TEXT,               -- publisher's own last-updated stamp
     is_official         INTEGER NOT NULL DEFAULT 0,
     story_id            INTEGER REFERENCES stories(id) ON DELETE SET NULL,
     is_demo             INTEGER NOT NULL DEFAULT 0,
@@ -298,6 +330,9 @@ CREATE TABLE IF NOT EXISTS fight_card_items (
     bout_order        INTEGER,
     status            TEXT    NOT NULL DEFAULT 'scheduled', -- scheduled|cancelled|changed|completed|rumored
     confidence        TEXT    NOT NULL DEFAULT 'reported',  -- official|reported|rumored
+    official_status   TEXT    NOT NULL DEFAULT 'reported',  -- official|reported|rumored|cancelled
+    canonical_fighter_a TEXT,
+    canonical_fighter_b TEXT,
     source_article_id INTEGER REFERENCES articles(id) ON DELETE SET NULL,
     source_story_id   INTEGER REFERENCES stories(id) ON DELETE SET NULL,
     source_url        TEXT,
