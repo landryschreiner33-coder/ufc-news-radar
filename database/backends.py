@@ -11,21 +11,25 @@ and every rule below is listed with the reason it exists.
 
 Choosing a backend
 ------------------
-``DATABASE_URL`` (or ``UFC_RADAR_DATABASE_URL``) selects PostgreSQL. Anything
-else uses the SQLite file at ``UFC_RADAR_DB``. If a PostgreSQL URL is set but
-the driver is missing, start-up **fails loudly**: quietly writing to a local
-file while the operator believes their data is going to a managed database is
-exactly the kind of silent lie this project refuses to ship.
+``DATABASE_URL`` (or ``UFC_RADAR_DATABASE_URL``), or a ``[database]`` section
+in the Streamlit secrets, selects PostgreSQL; anything else uses the SQLite
+file at ``UFC_RADAR_DB``. ``database/db_config.py`` owns that decision and
+the validation behind it - this module only builds what it is told to.
+
+If a PostgreSQL URL is configured but the driver is missing, start-up **fails
+loudly**: quietly writing to a local file while the operator believes their
+data is going to a managed database is exactly the kind of silent lie this
+project refuses to ship.
 """
 from __future__ import annotations
 
-import os
 import re
 import sqlite3
 import threading
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Sequence
 
+from database.db_config import database_url, safe_url as _safe_url
 from utils.logging_setup import get_logger
 
 logger = get_logger(__name__)
@@ -201,11 +205,11 @@ class PostgresBackend(DatabaseBackend):
             import psycopg2.extras  # noqa: F401
         except ImportError as exc:  # pragma: no cover - depends on the install
             raise DriverMissingError(
-                "DATABASE_URL points at PostgreSQL but the psycopg2 driver is not "
-                "installed. Install it with `pip install psycopg2-binary` (it is in "
-                "requirements.txt), or unset DATABASE_URL to use the local SQLite "
-                "file. The app will not quietly write somewhere other than the "
-                "database you configured."
+                "The configuration points at PostgreSQL but the psycopg2 driver is "
+                "not installed. Install it with `pip install psycopg2-binary` (it is "
+                "in requirements.txt), or remove DATABASE_URL / the [database] "
+                "secrets section to use the local SQLite file. The app will not "
+                "quietly write somewhere other than the database you configured."
             ) from exc
         import psycopg2
 
@@ -276,29 +280,25 @@ def _translate_outside_literals(sql: str, translate) -> str:
     return "".join(output)
 
 
-def _safe_url(url: str) -> str:
-    """A connection string with the password removed - never log the real one."""
-    return re.sub(r"://([^:/@]+):[^@]*@", r"://\1:***@", url or "")
-
-
 # ------------------------------------------------------------- selection ---
 _lock = threading.Lock()
 
 
 def postgres_url() -> Optional[str]:
-    """A configured PostgreSQL URL, if the operator set one."""
-    for name in ("UFC_RADAR_DATABASE_URL", "DATABASE_URL"):
-        value = os.getenv(name)
-        if value and value.strip().startswith(("postgres://", "postgresql://")):
-            return value.strip()
-    return None
+    """A configured PostgreSQL URL, if the operator set one.
+
+    Either from ``DATABASE_URL`` or assembled from the ``[database]`` secrets
+    section; ``database/db_config.py`` decides which and validates it.
+    """
+    return database_url()
 
 
 def build_backend(sqlite_path: str, url: Optional[str] = None) -> DatabaseBackend:
     """The backend this process should use.
 
     A configured PostgreSQL URL always wins, and a missing driver raises
-    rather than falling back to SQLite.
+    rather than falling back to SQLite. Pass ``url`` to override the
+    configuration (tests do); leave it out to use what was configured.
     """
     url = url if url is not None else postgres_url()
     if url:

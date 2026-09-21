@@ -19,12 +19,14 @@ Permanent history, simplest first:
    the project folder and persists like any other file. Nothing to set up.
 2. **A mounted persistent disk.** Point ``UFC_RADAR_DB`` at a path on a volume
    that survives restarts (a VPS disk, a container volume).
-3. **PostgreSQL.** Set ``DATABASE_URL`` to a managed PostgreSQL instance. This
-   is implemented (``database/backends.py``) and the whole test suite runs
-   against it, not just SQLite. It is the option for Streamlit Community
-   Cloud, whose filesystem is wiped on every restart.
+3. **PostgreSQL.** Point the app at a managed PostgreSQL instance, either
+   with ``DATABASE_URL`` or with a ``[database]`` secrets section
+   (``database/db_config.py``). This is implemented (``database/backends.py``)
+   and the whole test suite runs against it, not just SQLite. It is the
+   option for Streamlit Community Cloud, whose filesystem is wiped on every
+   restart.
 
-If ``DATABASE_URL`` is set but the driver is missing, start-up fails rather
+If PostgreSQL is configured but the driver is missing, start-up fails rather
 than quietly writing to a local file the operator was not expecting.
 """
 from __future__ import annotations
@@ -36,6 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from database import db_config
 from database.backends import postgres_url
 from database.db import backend_name, close_connection, current_db_path, get_connection
 from utils.logging_setup import get_logger
@@ -73,8 +76,11 @@ class StorageReport:
 
 def describe_location(path: str) -> str:
     """Where the data lives, without printing a server filesystem path."""
-    if postgres_url():
-        return "Managed PostgreSQL database (set by DATABASE_URL)"
+    configured = db_config.resolve()
+    if configured.is_postgres:
+        # The source, not the URL: the reader needs to know which setting is
+        # in charge, and the URL carries a password.
+        return f"Managed PostgreSQL database (configured by {configured.source})"
     resolved = Path(path)
     try:
         inside_project = resolved.resolve().is_relative_to(Path.cwd())
@@ -136,8 +142,9 @@ def storage_report() -> StorageReport:
                 "accumulate over time."
             ),
             advice=[
-                "Set DATABASE_URL to a managed PostgreSQL database for permanent history. "
-                "The app uses it directly - nothing else needs changing.",
+                "Point the app at a managed PostgreSQL database for permanent history: "
+                "DATABASE_URL, or a [database] section in the Secrets box with host, "
+                "port, database, username and password. Nothing else needs changing.",
                 "Or download a backup below before any redeploy, and restore it afterwards.",
                 "Or run the app on your own PC, where the file persists like any other.",
             ],

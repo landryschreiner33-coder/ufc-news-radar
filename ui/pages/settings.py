@@ -18,7 +18,7 @@ from utils.config import get_config
 
 
 def render() -> None:
-    page_header("SETTINGS", "Secrets live in your .env file - never in the app or the database.")
+    page_header("SETTINGS", "Secrets live in your .env file, or the Secrets box if you deploy - never in the app or the database.")
     tabs = st.tabs([
         "General", "Sources", "X / Twitter", "AI provider", "Source classifications",
         "Demo data", "Database", "Data corrections",
@@ -301,8 +301,9 @@ def _render_database() -> None:
     st.dataframe(frame, width="stretch", hide_index=True, height=420)
     bullet_list([
         "Change the SQLite location with UFC_RADAR_DB in .env.",
-        "Set DATABASE_URL to use PostgreSQL instead - that is the option for permanent "
-        "history on a host with a temporary filesystem.",
+        "Use PostgreSQL instead for permanent history on a host with a temporary "
+        "filesystem: either DATABASE_URL, or a [database] section in the Secrets box "
+        "with host, port, database, username and password.",
         "Deleting the database resets everything; the app rebuilds the schema on the next start.",
     ])
 

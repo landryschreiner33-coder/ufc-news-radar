@@ -88,8 +88,9 @@ Layers, bottom up:
 * **`utils/`** - config (env only), HTTP client (timeouts, retries, 429,
   conditional GETs), text/URL normalisation, UTC time helpers, logging, paths.
 * **`database/`** - schema, migrations, one repository module per domain area,
-  seed data and demo data. `backends.py` chooses SQLite or PostgreSQL and
-  translates the one SQL dialect the repositories are written in;
+  seed data and demo data. `db_config.py` works out *which* database was
+  configured and validates it; `backends.py` builds it - SQLite or PostgreSQL -
+  and translates the one SQL dialect the repositories are written in;
   `persistence.py` reports honestly on whether the storage actually persists.
 
 * **`models/types.py`** - the shared vocabulary (statuses, source types,
@@ -122,8 +123,8 @@ Layers, bottom up:
 ## 4. Important technical decisions
 
 **SQLite locally, PostgreSQL in production.** One file, zero setup for a
-beginner; `DATABASE_URL` switches the whole app to PostgreSQL, which is what
-makes a deployment on a temporary filesystem keep its history. All timestamps
+beginner; a configured PostgreSQL database switches the whole app over, which
+is what makes a deployment on a temporary filesystem keep its history. All timestamps
 are ISO-8601 UTC strings in exactly `YYYY-MM-DDTHH:MM:SSZ` so string
 comparison sorts chronologically and the values parse straight into
 `timestamptz`. Lists/dicts are JSON text. No SQLite-only column types.
@@ -135,10 +136,25 @@ case-insensitivity, `AUTOINCREMENT` -> `BIGSERIAL`, `RETURNING id` because
 there is no `lastrowid`). A second copy of every query would be a second place
 for the two to drift apart. Both backends run the whole test suite.
 
-**A configured backend is never silently swapped.** If `DATABASE_URL` is set
-and the driver is missing, start-up fails with an explanation. Writing to a
-local file while the operator believes their data is going to a managed
-database is the worst kind of bug this project can have.
+**A configured backend is never silently swapped.** If a database is
+configured and the driver is missing - or a field is missing, or the value
+cannot be understood - start-up fails with an explanation. Writing to a local
+file while the operator believes their data is going to a managed database is
+the worst kind of bug this project can have.
+
+**The connection is configured two ways, and assembled in one place.**
+`DATABASE_URL` is a whole connection string (environment, `.env`, or a
+top-level Streamlit secret). A `[database]` section in the Streamlit secrets
+gives the same thing field by field - host, port, database, username,
+password - which is the shape providers print and the shape the Secrets box
+is built for; Streamlit only copies *top-level* string secrets into the
+environment, so a section has to be read from `st.secrets` itself.
+`database/db_config.py` validates either one and percent-encodes every field,
+because a password containing `@` or `/` written into a URL by hand produces
+a connection string that fails - or silently means something else.
+`DATABASE_URL` wins when both exist, so adding a section never changes a
+deployment that already works. Errors name the *field* that is wrong and
+never quote a password; `safe_url` masks it everywhere else.
 
 
 **Schema versioning.** `PRAGMA user_version` + a `migrations` table.
@@ -289,6 +305,11 @@ implemented and tested; start-up fails rather than falling back if the driver
 is missing), `HTTP_TIMEOUT_SECONDS`, `HTTP_USER_AGENT`, `UFC_RADAR_DEBUG`.
 See `.env.example` for descriptions.
 
+On Streamlit Community Cloud the same values go in the Secrets box. The
+database may instead be given as a `[database]` section there (`host`, `port`,
+`database`, `username`, `password`, plus anything else the provider needs,
+such as `sslmode`) - see `database/db_config.py`.
+
 User *preferences* (thresholds, enabled sources, watchlists, monitored
 accounts, sort order) live in the `settings` table and are edited in the UI -
 never in `.env`.
@@ -314,7 +335,7 @@ never in `.env`.
 
 | Integration | Status | Notes |
 | --- | --- | --- |
-| PostgreSQL | working | `DATABASE_URL`; the whole test suite runs against it |
+| PostgreSQL | working | `DATABASE_URL` or a `[database]` secrets section; the whole test suite runs against it |
 | RSS/Atom feeds | working | 14 built-in sources, user-extendable |
 
 | UFC.com rankings | working | HTML parse, structured + generic fallback |
@@ -369,10 +390,16 @@ reconciliation, result safety, X integration (disabled without a token), the AI
 layer with template fallback, the full dashboard with research mode, TikTok
 Studio, check-before-reporting, watchlists, search, filters, source health,
 settings, backups, data corrections and demo mode - plus the PostgreSQL
-backend and the background collector added in the bug-fix pass.
+backend and the background collector added in the bug-fix pass, and the
+``[database]`` secrets section added after it (`database/db_config.py`), which
+was driven end to end: a `[database]` section in `.streamlit/secrets.toml` and
+nothing else, and the app built its whole schema in that PostgreSQL database.
+An incomplete section and a wrong password each produced their own explained
+message on screen instead of a traceback, and correcting the file fixed the
+running app without a restart.
 
-**409 pytest tests pass on SQLite, and the same suite passes on PostgreSQL**
-(403 passed, 6 skipped there: the SQLite upgrade-path tests and the file-backup
+**441 pytest tests pass on SQLite, and the same suite passes on PostgreSQL**
+(435 passed, 6 skipped there: the SQLite upgrade-path tests and the file-backup
 test).
 `scripts/validate_production_data.py` reports 0 errors and 0 warnings after a
 reprocess.

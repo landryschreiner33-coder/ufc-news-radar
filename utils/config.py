@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Dict, Mapping, Optional
 
 from dotenv import load_dotenv
 
@@ -44,22 +44,49 @@ def load_env(force: bool = False) -> None:
     _ENV_LOADED = True
 
 
+_STREAMLIT: Any = None
+_STREAMLIT_MISSING = False
+
+
+def _streamlit() -> Any:
+    """The streamlit module, or None when it is not installed.
+
+    Imported once: a failed import is not cached by Python, and these lookups
+    happen often enough that re-scanning sys.path for a missing module every
+    time would be a silly thing to pay for.
+    """
+    global _STREAMLIT, _STREAMLIT_MISSING
+    if _STREAMLIT is not None or _STREAMLIT_MISSING:
+        return _STREAMLIT
+    try:
+        import streamlit
+    except Exception:
+        _STREAMLIT_MISSING = True
+        return None
+    _STREAMLIT = streamlit
+    return streamlit
+
+
 def _from_streamlit_secrets(name: str) -> Optional[str]:
     """Read one key from ``st.secrets`` if we are running under Streamlit.
 
-    Deliberately defensive: importing streamlit outside a Streamlit process, or
-    touching ``st.secrets`` with no secrets file, raises - and configuration
-    must never be the thing that crashes the app or the test suite.
+    Deliberately defensive: there may be no streamlit at all, and touching
+    ``st.secrets`` with no secrets file raises - configuration must never be
+    the thing that crashes the app or the test suite.
     """
+    st = _streamlit()
+    if st is None:
+        return None
     try:
-        import streamlit as st
-
         value = st.secrets.get(name)  # type: ignore[union-attr]
         if value is None:
             # Streamlit also supports [section] grouping; check one level down.
             for section in ("ufc_news_radar", "general", "secrets"):
                 group = st.secrets.get(section)  # type: ignore[union-attr]
-                if isinstance(group, dict) and name in group:
+                # Streamlit hands back its own AttrDict, which is a Mapping
+                # but not a dict - testing for dict quietly skipped every
+                # grouped secret.
+                if isinstance(group, Mapping) and name in group:
                     value = group[name]
                     break
         if value is None:
@@ -70,6 +97,35 @@ def _from_streamlit_secrets(name: str) -> Optional[str]:
         return None
 
 
+def secrets_section(name: str) -> Dict[str, Any]:
+    """One ``[section]`` table from ``st.secrets``, as a plain dict.
+
+    Streamlit copies *top-level* string secrets into the environment, so those
+    arrive through :func:`secret` like any other variable. A section does not:
+    it can only be read from ``st.secrets`` itself, which is what makes this
+    function necessary for ``[database]`` (see ``database/db_config.py``).
+
+    Returns an empty dict whenever there is nothing to read - no Streamlit, no
+    secrets file, no such section - because configuration must never be the
+    thing that crashes the app or the test suite.
+
+    Read fresh every time. Streamlit caches the parsed file itself and reloads
+    it when it changes, so this is a dictionary lookup, and caching it here
+    would only mean showing the user an error about a secret they have already
+    corrected.
+    """
+    st = _streamlit()
+    if st is None:
+        return {}
+    try:
+        value = st.secrets.get(name)  # type: ignore[union-attr]
+    except Exception:
+        return {}
+    if isinstance(value, Mapping):
+        return {str(key): item for key, item in value.items()}
+    return {}
+
+
 def _env(name: str, default: str = "") -> str:
     """Environment variable, then .env, then Streamlit Cloud secrets."""
     load_env()
@@ -77,6 +133,15 @@ def _env(name: str, default: str = "") -> str:
     if value is None or value == "":
         value = _from_streamlit_secrets(name)
     return default if value is None or value == "" else str(value).strip()
+
+
+def secret(name: str, default: str = "") -> str:
+    """One configuration value: environment, then .env, then st.secrets.
+
+    The public name for the lookup this module has always done internally -
+    other modules need it without reaching for a private helper.
+    """
+    return _env(name, default)
 
 
 def _env_int(name: str, default: int) -> int:

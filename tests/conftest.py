@@ -48,6 +48,28 @@ TEST_DATABASE_URL = os.getenv("UFC_RADAR_TEST_DATABASE_URL", "").strip()
 running_on_postgres = bool(TEST_DATABASE_URL)
 
 
+@pytest.fixture(autouse=True, scope="session")
+def isolated_streamlit_secrets():
+    """The suite must not read whoever-is-running-it's own secrets file.
+
+    ``.streamlit/secrets.toml`` is a real local file on a developer's machine
+    (that is the point of it), and without this a [database] section there
+    would quietly redirect every test at their production database.
+    """
+    try:
+        from streamlit import config as st_config
+        from streamlit.runtime.secrets import secrets_singleton
+    except Exception:  # streamlit is not installed; nothing to isolate
+        yield
+        return
+    previous = st_config.get_option("secrets.files")
+    st_config.set_option("secrets.files", [])
+    secrets_singleton._reset()
+    yield
+    st_config.set_option("secrets.files", previous)
+    secrets_singleton._reset()
+
+
 def _reset_postgres_schema() -> None:
     """Empty the test database between tests, cheaply and completely."""
     connection = get_connection()

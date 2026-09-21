@@ -271,7 +271,7 @@ need more than one of the three.
 | `X_MAX_RESULTS_PER_QUERY` | `25` | Posts requested per query |
 | `X_QUERY_CACHE_MINUTES` | `30` | Do not repeat an identical query sooner |
 | `UFC_RADAR_DB` | `data/ufc_news_radar.db` | Where the SQLite file lives |
-| `DATABASE_URL` | empty | Use PostgreSQL instead of SQLite (see *Running it online*) |
+| `DATABASE_URL` | empty | Use PostgreSQL instead of SQLite - or a `[database]` secrets section (see *Running it online*) |
 | `HTTP_TIMEOUT_SECONDS` | `20` | Per-request timeout |
 | `HTTP_USER_AGENT` | `UFCNewsRadar/1.0 ...` | Sent with every request |
 | `UFC_RADAR_DEBUG` | `0` | `1` for verbose logging |
@@ -401,7 +401,12 @@ python -m pytest -k rumor              :: tests matching a word
 ```
 
 The tests use their own temporary databases and never touch your real data or
-the network.
+the network. They also ignore your own `.streamlit/secrets.toml`, so a
+`[database]` section there cannot quietly point the suite at a real database.
+
+Recorded feeds carry relative dates (`{{minutes_ago:145}}`, filled in when the
+fixture is served) rather than real ones, so a test that depends on a story
+being recent means the same thing next month as it does today.
 
 ### Testing against PostgreSQL
 
@@ -504,30 +509,70 @@ history - the news the app collects will not build up over time.
 ### Permanent storage (PostgreSQL)
 
 For history that lasts on a host like that, give the app a database instead of
-a file. Add one line to the app's **Secrets** box:
+a file. Any managed PostgreSQL works - Neon, Supabase, Railway and Amazon RDS
+all have a free or near-free tier that is more than this app needs.
+
+There are two ways to tell the app about it, and **you only need one**.
+
+**The easy one - copy the fields across.** Your provider's connection page
+lists the host, port, database, user and password separately. Put them in the
+app's **Secrets** box under a `[database]` heading, exactly as they appear
+there:
+
+```toml
+[database]
+host = "aws-1-eu-west-2.pooler.supabase.com"
+port = 5432
+database = "postgres"
+username = "postgres.abcdefghijkl"
+password = "your-database-password"
+```
+
+Nothing has to be joined up or punctuated by hand. The app builds the
+connection string itself and percent-encodes every value, so a password
+containing `@`, `/`, `:` or `#` works exactly as typed - by hand those
+characters produce a URL that either fails to connect or, worse, connects
+somewhere else.
+
+If your provider also gives you an `sslmode` (or any other connection
+setting), add it as another line in the same section and it is passed
+straight through:
+
+```toml
+sslmode = "require"
+```
+
+**The other one - one connection string.** If you already have a URL, keep
+using it. This works as a Streamlit secret, as a real environment variable,
+and in `.env`:
 
 ```toml
 DATABASE_URL = "postgresql://user:password@host:5432/ufc_news_radar"
 ```
 
-That is the whole setup. The app creates its schema, runs its migrations and
-uses PostgreSQL for everything; nothing else changes. Any managed PostgreSQL
-works - Neon, Supabase, Railway and Amazon RDS all have a free or near-free
-tier that is more than this app needs.
+`DATABASE_URL` wins if both are present, so adding a `[database]` section
+never changes an app that already works.
 
-Two deliberate behaviours:
+That is the whole setup either way. The app creates its schema, runs its
+migrations and uses PostgreSQL for everything; nothing else changes.
 
-* **It will not quietly fall back.** If `DATABASE_URL` is set but the driver
-  is missing, the app refuses to start and says why, rather than writing to a
-  local file you were not expecting.
+Three deliberate behaviours:
+
+* **It will not quietly fall back.** If a database is configured but the
+  driver is missing - or a field is missing, or the host is not a host - the
+  app refuses to start and says exactly what is wrong, rather than writing to
+  a local file you were not expecting.
+* **The password is never shown.** Not in the error messages, not on the
+  Settings page, not in the logs. Settings names *which setting* is in charge,
+  not what is in it.
 * **Backups change hands.** With PostgreSQL, backups are your provider's
   (managed snapshots or `pg_dump`). Settings says so instead of offering a
   file export that would contain nothing.
 
 Both backends run the same test suite - see *Running the tests* below.
 
-Without `DATABASE_URL`, the options in order of simplicity are: run it on your
-PC (the default, nothing to set up); point `UFC_RADAR_DB` at a disk that
+With no database configured, the options in order of simplicity are: run it on
+your PC (the default, nothing to set up); point `UFC_RADAR_DB` at a disk that
 survives restarts (a VPS disk, a container volume); or take a backup
 (Settings → Database) before each redeploy and restore it afterwards.
 

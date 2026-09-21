@@ -3,11 +3,13 @@
 Living status of UFC News Radar. Updated as work lands.
 
 **Last updated:** 2026-09-21
-**Test status:** ✅ 409 passed on SQLite; ✅ 403 passed / 6 skipped on PostgreSQL
+**Test status:** ✅ 441 passed on SQLite; ✅ 435 passed / 6 skipped on PostgreSQL
 (the same suite, `UFC_RADAR_TEST_DATABASE_URL=... python -m pytest`)
 **Data status:** ✅ `python scripts/validate_production_data.py` - 0 errors, 0 warnings
 **App status:** ✅ 12 pages × 7 viewport widths driven in Chromium; no exceptions,
-no horizontal overflow, no escaped markup, no sidebar covering the feed
+no horizontal overflow, no escaped markup, no sidebar covering the feed. The
+`[database]` secrets path was driven end to end against a real PostgreSQL
+server: schema built, errors explained on screen, recovery without a restart.
 
 ---
 
@@ -54,14 +56,37 @@ in `tests/test_bugfix_regressions.py`.
       seeded as off was on.
 - [x] **`app.pid` removed from git** and added to `.gitignore`.
 
+### Test fixtures
+
+- [x] **Recorded feeds no longer rot.** Their `pubDate`s were real dates, so
+      the suite quietly aged out: once the fixtures were more than three days
+      old, a story-linking test started failing for reasons that had nothing
+      to do with the code. Feed fixtures now carry `{{minutes_ago:N}}`
+      placeholders that `tests/fake_http.py` fills in when it serves them,
+      keeping the original spacing between items.
+
 ### Persistence and background collection
 
 - [x] **PostgreSQL implemented, not promised.** `DATABASE_URL` switches the
       whole app over; `database/backends.py` translates the one SQL dialect
       the repositories are written in. The entire test suite runs against a
       real PostgreSQL 16 server, not just SQLite.
-- [x] **No silent fallback.** A configured `DATABASE_URL` with no driver fails
-      at start-up with an explanation instead of writing to a local file.
+- [x] **Two ways to configure it, one place that validates them.**
+      `DATABASE_URL` (environment, `.env`, or a top-level Streamlit secret), or
+      a `[database]` section in the Secrets box with `host`, `port`,
+      `database`, `username` and `password` - the shape providers actually
+      print. `database/db_config.py` assembles and percent-encodes the URL, so
+      a password containing `@` or `/` works as typed; `DATABASE_URL` wins when
+      both exist, so adding a section never changes a working deployment.
+      Extra keys (`sslmode`, ...) pass straight through.
+- [x] **Configuration mistakes are explained, not crashed on.** A missing
+      field, a connection string pasted into the `host` box, a port that is
+      not a number: each fails at start-up naming the field, and the app shows
+      that message instead of a traceback. No message, log line or screen ever
+      contains the password.
+- [x] **No silent fallback.** A configured database with no driver - or a
+      value that cannot be understood - fails at start-up with an explanation
+      instead of writing to a local file.
 - [x] **`scripts/scheduler.py`** - the collector as its own process, on an
       interval, with a lock held in the database so an app and a cron job
       cannot collect over each other. Windows/cron/systemd/container recipes
@@ -186,7 +211,7 @@ the old test suite, because those tests only ever saw freshly built fixtures.
 | X monitoring | `X_BEARER_TOKEN` from an X developer account | Integration built and tested against recorded API responses; shows **X MONITORING - NOT CONFIGURED** until a token exists. |
 | AI-written summaries/scripts | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` | Providers implemented; app runs in labelled template mode meanwhile. |
 | Live feed verification | The build sandbox has no outbound internet (egress policy blocks every news domain, `ufc.com`, and the deployed Streamlit app itself; confirmed again this round) | Collection, parsing and failure handling are tested against recorded fixtures. **No live UFC endpoint, feed, image or deployed page was verified in this pass.** The first live run happens on your machine; Source health reports exactly what each source did. |
-| Permanent history on Streamlit Cloud | A PostgreSQL database of your own | **The app side is done and tested.** Set `DATABASE_URL` in the app's Secrets box and it uses PostgreSQL for everything. What remains is external: create a database with any provider (Neon, Supabase, Railway, RDS) and paste its URL in. |
+| Permanent history on Streamlit Cloud | A PostgreSQL database of your own | **The app side is done and tested.** Paste the provider's fields into the Secrets box under `[database]` (host, port, database, username, password), or set `DATABASE_URL`; either one switches the whole app to PostgreSQL. What remains is external: create a database with any provider (Neon, Supabase, Railway, RDS). |
 
 
 ---

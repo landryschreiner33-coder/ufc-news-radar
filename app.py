@@ -265,9 +265,56 @@ NAVIGATION = {
 nav.register(PAGES)
 
 
+def start_database() -> None:
+    """Open the database, or explain clearly why it could not be opened.
+
+    A broken database configuration is the one start-up failure a beginner is
+    most likely to hit - a half-filled Secrets box, a password pasted into the
+    wrong field - and a Python traceback is the least useful way to say so.
+    The errors raised by ``database/db_config.py`` name the field that is
+    wrong and never contain the password, so they are safe to put on screen.
+    """
+    from database.backends import DriverMissingError
+    from database.db_config import DatabaseConfigError, resolve
+
+    where = (
+        "Streamlit Community Cloud: open ⋮ → Settings → Secrets and check the values "
+        "there. Locally: check your .env file, or .streamlit/secrets.toml."
+    )
+    try:
+        bootstrap()
+    except (DatabaseConfigError, DriverMissingError) as error:
+        st.error(f"**The database is not configured correctly.**\n\n{error}")
+        st.caption(where)
+        st.stop()
+    except _connection_errors() as error:
+        # The settings are well-formed and the database still would not open:
+        # a wrong password, a host that is not listening, a firewall. The
+        # driver's own message says which, and never contains the password.
+        # libpq reports one line per address it tried, and they are usually
+        # identical, so the repeats are folded away before it goes on screen.
+        lines = [line.strip() for line in str(error).splitlines() if line.strip()]
+        detail = "  \n".join(dict.fromkeys(lines))
+        st.error(
+            f"**The database is configured but could not be opened.**\n\n{detail}\n\n"
+            f"Configured by {resolve().source}."
+        )
+        st.caption(where)
+        st.stop()
+
+
+def _connection_errors() -> tuple:
+    """The driver errors that mean "could not connect", if the driver is here."""
+    try:
+        import psycopg2
+    except ImportError:
+        return ()
+    return (psycopg2.OperationalError,)
+
+
 def main() -> None:
     inject_css()
-    bootstrap()
+    start_database()
     page = st.navigation(NAVIGATION, position="sidebar")
 
     # The app name, once per screen. The dashboard's own heading already says

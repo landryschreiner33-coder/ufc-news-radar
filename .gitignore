@@ -14,6 +14,10 @@ htmlcov/
 .env
 .env.local
 *.key
+# .streamlit/config.toml is the theme and is committed; secrets.toml is the
+# database password and is not. Same folder, opposite treatment.
+.streamlit/secrets.toml
+secrets.toml
 
 # Local database + caches (regenerated on demand)
 data/*.db
