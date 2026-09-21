@@ -415,10 +415,15 @@ UFC_RADAR_TEST_DATABASE_URL=postgresql://user:pass@localhost/ufc_radar_test \
     python -m pytest
 ```
 
-The run needs a database of its own: it drops and recreates the schema between
-tests. The upgrade-path tests are skipped there, because a fresh PostgreSQL
-database is created at the current schema version and there is no older one in
-the wild to upgrade.
+The run needs a database of its own, and only one run at a time: it drops and
+recreates the schema between tests, so two copies pointed at the same database
+will tear each other's tables down mid-test and produce a wall of
+"relation does not exist" errors that look like real failures.
+
+The upgrade-path tests are skipped there, because a fresh PostgreSQL database
+is created at the current schema version and there is no older one in the wild
+to upgrade.
+
 
 ---
 

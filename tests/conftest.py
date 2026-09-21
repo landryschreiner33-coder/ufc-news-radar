@@ -12,7 +12,11 @@ the other backend:
 
 
 The PostgreSQL run drops and recreates the public schema per test, which is
-why it needs a database of its own.
+why it needs a database of its own - and why only one such run may be in
+flight at a time. Two concurrent runs drop each other's tables between tests
+and fail with "relation does not exist" everywhere, which looks alarming and
+means nothing.
+
 """
 from __future__ import annotations
 
