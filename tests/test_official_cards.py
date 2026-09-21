@@ -13,7 +13,9 @@ import pytest
 from collectors.ufc_event_card import parse_event_card
 from database import repo_entities as entities_repo
 from models.types import EventStatus
+from processors import bout_status as bout_model
 from processors.event_lifecycle import EVIDENCE_CANCELLED, EVIDENCE_COMPLETED
+
 from processors.event_reconcile import evidence_from_articles, reconcile_event
 
 CARD_HTML = """
@@ -66,22 +68,44 @@ def test_unparseable_card_fails_loudly_instead_of_guessing():
 def test_official_bouts_are_marked_official_and_reported_ones_are_not():
     event_id = entities_repo.upsert_event("UFC 331", data_origin="official")
     entities_repo.upsert_fight(event_id, "Fighter A", "Fighter B",
-                               confidence="reported", source_name="MMA Junkie")
+                               bout_status=bout_model.classify(source_type="MAJOR_NEWS"),
+                               source_name="MMA Junkie")
     entities_repo.upsert_fight(event_id, "Alexandre Pantoja", "Joshua Van",
-                               confidence="official", official_status="official",
+                               bout_status=bout_model.classify(from_official_card=True,
+                                                               source_type="OFFICIAL"),
                                source_name="UFC.com")
     card = entities_repo.fight_card(event_id)
     by_name = {bout["fighter_a"]: bout for bout in card}
-    assert by_name["Alexandre Pantoja"]["official_status"] == "official"
-    assert by_name["Fighter A"]["official_status"] != "official"
+    assert by_name["Alexandre Pantoja"]["official_status"] == bout_model.OFFICIAL
+    assert by_name["Fighter A"]["official_status"] != bout_model.OFFICIAL
+
+
+def test_an_article_from_ufc_com_is_reporting_not_an_official_card_entry():
+    """UFC.com publishing an article is not UFC.com listing the bout.
+
+    Conflating the two is what produced "OFFICIAL BOUTS: 0" above a bout
+    labelled "confidence: official - source: UFC.com".
+    """
+    event_id = entities_repo.upsert_event("UFC 331", data_origin="official")
+    entities_repo.upsert_fight(event_id, "Fighter A", "Fighter B",
+                               bout_status=bout_model.classify(source_type="OFFICIAL"),
+                               source_name="UFC.com")
+    bout = entities_repo.fight_card(event_id)[0]
+    assert bout["official_status"] == bout_model.REPORTED
+    assert bout["evidence_level"] == bout_model.EVIDENCE_OFFICIAL_SOURCE
+    assert bout_model.is_consistent(bout["official_status"], bout["evidence_level"])
 
 
 def test_a_reported_bout_upgrading_to_official_is_logged_as_a_change():
     event_id = entities_repo.upsert_event("UFC 331", data_origin="official")
-    entities_repo.upsert_fight(event_id, "Fighter A", "Fighter B", confidence="reported")
+    entities_repo.upsert_fight(event_id, "Fighter A", "Fighter B",
+                               bout_status=bout_model.classify(source_type="MAJOR_NEWS"))
     _, _, changes = entities_repo.upsert_fight(
-        event_id, "Fighter A", "Fighter B", confidence="official", official_status="official")
+        event_id, "Fighter A", "Fighter B",
+        bout_status=bout_model.classify(from_official_card=True, source_type="OFFICIAL"))
     assert any("official" in (change.get("after_text") or "") for change in changes)
+    bout = entities_repo.fight_card(event_id)[0]
+    assert bout["evidence_level"] == bout_model.EVIDENCE_OFFICIAL_CARD
 
 
 # ------------------------------------------------------------ reconcile ----

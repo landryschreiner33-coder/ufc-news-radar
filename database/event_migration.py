@@ -19,8 +19,10 @@ from utils.timeutil import utcnow_iso
 logger = get_logger(__name__)
 
 
-def _columns(connection: sqlite3.Connection, table: str) -> set:
-    return {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+def _columns(connection, table: str) -> set:
+    from database.db import table_columns
+
+    return set(table_columns(connection, table))
 
 
 def register_aliases(connection: sqlite3.Connection, event_id: int,
@@ -43,10 +45,24 @@ def _merge_pair(connection: sqlite3.Connection, keeper: Dict[str, Any],
         return
 
     # Child rows move across. fight_card_items has UNIQUE(event_id, pair_key),
-    # so a bout already on the keeper wins and the duplicate is dropped.
-    connection.execute(
-        "UPDATE OR IGNORE fight_card_items SET event_id = ? WHERE event_id = ?", (keep_id, lose_id))
+    # so a bout already on the keeper wins and the duplicate is dropped. The
+    # already-present pair keys are read first and excluded by hand: SQLite's
+    # "UPDATE OR IGNORE" would do this in one statement but is SQLite-only,
+    # and this layer has to work on PostgreSQL too.
+    existing = {
+        row[0] for row in connection.execute(
+            "SELECT pair_key FROM fight_card_items WHERE event_id = ?", (keep_id,)).fetchall()
+    }
+    movable = [
+        row[0] for row in connection.execute(
+            "SELECT id, pair_key FROM fight_card_items WHERE event_id = ?", (lose_id,)).fetchall()
+        if row[1] not in existing
+    ]
+    for fight_id in movable:
+        connection.execute(
+            "UPDATE fight_card_items SET event_id = ? WHERE id = ?", (keep_id, fight_id))
     connection.execute("DELETE FROM fight_card_items WHERE event_id = ?", (lose_id,))
+
     for table, column in (("fight_card_changes", "event_id"), ("stories", "event_id")):
         connection.execute(f"UPDATE {table} SET {column} = ? WHERE {column} = ?", (keep_id, lose_id))
 

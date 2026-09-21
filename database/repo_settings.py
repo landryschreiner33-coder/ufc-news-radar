@@ -11,6 +11,17 @@ from utils.timeutil import utcnow_iso
 TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
+def _truthy(value: Any) -> bool:
+    """Interpret a boolean setting from either a bool or its stored text."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in TRUE_VALUES
+
+
 # ------------------------------------------------------------- settings ----
 def set_setting(key: str, value: Any, value_type: Optional[str] = None) -> None:
     if value_type is None:
@@ -24,10 +35,17 @@ def set_setting(key: str, value: Any, value_type: Optional[str] = None) -> None:
             value_type = "json"
         else:
             value_type = "str"
-    stored = json_dump(value) if value_type == "json" else (
-        "1" if (value_type == "bool" and value) else "0" if value_type == "bool" else str(value)
-    )
+    if value_type == "json":
+        stored = json_dump(value)
+    elif value_type == "bool":
+        # Read the value, do not test its truthiness: the string "0" is a
+        # perfectly ordinary non-empty string, so `if value` stored every
+        # bool seeded as "0" - including this app's own defaults - as ON.
+        stored = "1" if _truthy(value) else "0"
+    else:
+        stored = str(value)
     execute(
+
         "INSERT INTO settings (key, value, value_type, updated_at) VALUES (?,?,?,?) "
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value, value_type=excluded.value_type, "
         "updated_at=excluded.updated_at",

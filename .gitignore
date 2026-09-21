@@ -28,3 +28,6 @@ logs/
 Thumbs.db
 .idea/
 .vscode/
+
+# Stray artefact of the dev restart helper - never belongs in git.
+app.pid

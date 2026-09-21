@@ -15,10 +15,12 @@ from typing import Any, Dict, List, Optional
 
 from bs4 import BeautifulSoup
 
+from processors import bout_status as bout_model
 from utils.http import HttpClient
 from utils.logging_setup import get_logger
 from utils.textutil import collapse_whitespace, normalize_text
 from utils.timeutil import utcnow_iso
+
 
 logger = get_logger(__name__)
 
@@ -58,9 +60,9 @@ class OfficialBout:
             "is_title_fight": self.is_title_fight,
             "segment": self.segment,
             "bout_order": self.bout_order,
-            # Everything here came off UFC's own page.
-            "confidence": "official",
-            "official_status": "official",
+            # Everything here came off UFC's own card page, which is the only
+            # thing that may claim a bout is officially booked.
+            "from_official_card": True,
             "status": "scheduled",
         }
 
@@ -215,11 +217,12 @@ def collect_official_cards(events: List[Dict[str, Any]], client: Optional[HttpCl
                     segment=payload["segment"],
                     bout_order=payload["bout_order"],
                     status=payload["status"],
-                    confidence="official",
-                    official_status="official",
+                    bout_status=bout_model.classify(
+                        from_official_card=True, source_type="OFFICIAL"),
                     source_url=url,
                     source_name="UFC.com",
                 )
+
                 stored += 1
             except Exception as exc:
                 logger.debug("Could not store official bout: %s", exc)

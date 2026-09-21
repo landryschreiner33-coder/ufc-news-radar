@@ -1,5 +1,5 @@
 -- ============================================================================
--- UFC News Radar - SQLite schema (schema_version 1)
+-- UFC News Radar - SQLite schema (schema_version 5)
 --
 -- Conventions (kept PostgreSQL-friendly on purpose):
 --   * every timestamp is an ISO-8601 UTC string: YYYY-MM-DDTHH:MM:SSZ
@@ -329,8 +329,15 @@ CREATE TABLE IF NOT EXISTS fight_card_items (
     segment           TEXT,                -- main_event|co_main|main_card|prelims|unknown
     bout_order        INTEGER,
     status            TEXT    NOT NULL DEFAULT 'scheduled', -- scheduled|cancelled|changed|completed|rumored
-    confidence        TEXT    NOT NULL DEFAULT 'reported',  -- official|reported|rumored
+    -- Is the bout on UFC's own card?  'official' is set ONLY by the official
+    -- card collector; an article from UFC.com is reporting, not a card entry.
     official_status   TEXT    NOT NULL DEFAULT 'reported',  -- official|reported|rumored|cancelled
+    -- How strong is the evidence, independently of the above.  The two are
+    -- constrained together in processors/bout_status.py so they can never
+    -- contradict each other on screen.
+    evidence_level    TEXT    NOT NULL DEFAULT 'unconfirmed',
+                                   -- official_card|official_source|credible_reporting|unconfirmed
+    source_type       TEXT,        -- the reporting source's type, for provenance
     canonical_fighter_a TEXT,
     canonical_fighter_b TEXT,
     source_article_id INTEGER REFERENCES articles(id) ON DELETE SET NULL,
@@ -484,9 +491,14 @@ CREATE TABLE IF NOT EXISTS collection_runs (
     stories_updated    INTEGER NOT NULL DEFAULT 0,
     social_new         INTEGER NOT NULL DEFAULT 0,
     duration_ms        INTEGER,
+    -- What the run actually achieved. NEVER inferred from "a run happened":
+    -- a run where every source failed is a TOTAL_FAILURE, not an update.
+    outcome            TEXT    NOT NULL DEFAULT 'NOT_RUN',
+                                  -- SUCCESS|PARTIAL|TOTAL_FAILURE|NOT_RUN
     notes              TEXT,
     error              TEXT
 );
+
 CREATE INDEX IF NOT EXISTS idx_runs_started ON collection_runs(started_at DESC);
 
 -- ---------------------------------------------------------- x_query_cache --

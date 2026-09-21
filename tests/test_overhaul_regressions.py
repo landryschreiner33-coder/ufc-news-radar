@@ -17,7 +17,7 @@ from database import corrections
 from database import repo_articles as articles_repo
 from database import repo_entities as entities_repo
 from database import repo_stories as stories_repo
-from tests.conftest import hours_ago
+from tests.conftest import hours_ago, running_on_postgres
 
 
 # ----------------------------------------------- 9: duplicate fighters -----
@@ -192,8 +192,12 @@ def test_a_fighter_without_a_photo_gets_initials_not_someone_else():
 
 
 # ------------------------------------------------------ backup / restore ---
+@pytest.mark.skipif(
+    running_on_postgres,
+    reason="the file backup path covers SQLite; PostgreSQL backups are the provider's")
 def test_a_backup_round_trips_without_losing_data(ingest, make_article, tmp_path):
     from database.persistence import export_database, restore_database, validate_backup
+
 
     ingest([make_article(title="Backup me")])
     before = articles_repo.article_count()

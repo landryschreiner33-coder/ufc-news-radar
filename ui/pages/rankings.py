@@ -36,13 +36,20 @@ def render() -> None:
                    note="The app records whichever system UFC publishes, exactly as the page "
                         "labels it. It does not assume any particular ranking method.")
     for system in systems:
+        # Only the cleaned label is shown. The raw page text around it is page
+        # navigation and table headers, not information about the system.
+        version = str(system.get("system_version") or "").strip()
+        version_html = (f'<br>Published on the page as: "{version}"'
+                        if version and version.lower() != "unlabelled"
+                        and version != system.get("system_name") else "")
         st.markdown(
             f'<div class="panel"><div class="kv"><b>{system.get("system_name")}</b></div>'
-            f'<div class="muted">Label found on the page: "{system.get("system_version")}"<br>'
-            f'{system.get("rows_stored")} rows · first seen {system.get("first_seen")} · '
-            f'last seen {system.get("last_seen")}</div></div>',
+            f'<div class="muted">{system.get("rows_stored")} rows · '
+            f'first seen {system.get("first_seen")} · last seen {system.get("last_seen")}'
+            f'{version_html}</div></div>',
             unsafe_allow_html=True,
         )
+
 
     section_header("CURRENT RANKINGS")
     division = st.selectbox("Division", divisions, key="rank_division")

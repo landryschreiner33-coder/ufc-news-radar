@@ -16,11 +16,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -287,7 +290,155 @@ def check_official_conflicts() -> List[Finding]:
                     "Verify before reporting either version.")]
 
 
+def check_source_counts() -> List[Finding]:
+    """The arithmetic behind "2 sources, 3 independent" being on screen."""
+    rows = query_all(
+        "SELECT id, headline, source_count, independent_source_count, social_post_count, "
+        "article_count FROM stories")
+    impossible, no_sources = [], []
+    for row in rows:
+        total = int(row["source_count"] or 0)
+        independent = int(row["independent_source_count"] or 0)
+        if independent > total:
+            impossible.append(
+                f"#{row['id']} {row['headline'][:60]} - {independent} independent of {total} total")
+        if int(row["article_count"] or 0) > 0 and total == 0:
+            no_sources.append(f"#{row['id']} {row['headline'][:60]}")
+    findings: List[Finding] = []
+    if impossible:
+        findings.append(Finding(
+            ERROR, "independent_exceeds_total",
+            "Stories claim more independent news sources than they have news sources.",
+            impossible,
+            "News sources and social posts must be counted in separate pools - see "
+            "processors/verification.py. Re-run processing."))
+    if no_sources:
+        findings.append(Finding(
+            WARN, "articles_without_sources",
+            "Stories have articles but a news-source count of zero.",
+            no_sources, "Re-run processing so the counts are recomputed."))
+    return findings
+
+
+def check_bout_status_contradictions() -> List[Finding]:
+    """A bout cannot be off the official card and official at the same time."""
+    from processors import bout_status as bout_model
+
+    rows = query_all(
+        "SELECT f.id, f.fighter_a, f.fighter_b, f.official_status, f.evidence_level, "
+        "e.name AS event_name FROM fight_card_items f "
+        "LEFT JOIN events e ON e.id = f.event_id")
+    bad = [
+        f"#{row['id']} {row['fighter_a']} vs {row['fighter_b']} ({row['event_name']}): "
+        f"official_status={row['official_status']} evidence_level={row['evidence_level']}"
+        for row in rows
+        if not bout_model.is_consistent(row["official_status"], row["evidence_level"])
+    ]
+    if not bad:
+        return []
+    return [Finding(
+        ERROR, "bout_status_contradiction",
+        "Bouts describe themselves two different ways at once.",
+        bad,
+        "Only the official card collector may set official_status='official'. "
+        "See processors/bout_status.py; re-run the schema migration.")]
+
+
+def check_article_intent() -> List[Finding]:
+    """Articles exempt from the preview/prediction gate."""
+    rows = query_all(
+        "SELECT id, title FROM articles WHERE intent IS NULL OR intent = '' OR intent = ?",
+        (ArticleIntent.UNKNOWN.value,))
+    if not rows:
+        return []
+    return [Finding(
+        WARN, "unclassified_intent",
+        "Articles have no intent, so the preview/prediction result gate does not apply to them.",
+        [f"#{row['id']} {row['title'][:70]}" for row in rows],
+        "Migration 5 backfills these. Restart the app, or re-run enrichment.")]
+
+
+def check_malformed_urls() -> List[Finding]:
+    """Links that cannot be opened, without making a single request."""
+    findings: List[Finding] = []
+    for table, label in (("articles", "url"), ("events", "ufc_url"),
+                         ("fight_card_items", "source_url")):
+        rows = query_all(f"SELECT id, {label} AS link FROM {table} WHERE {label} IS NOT NULL "
+                         f"AND {label} != ''")
+        bad = []
+        for row in rows:
+            parsed = urlparse(str(row["link"]))
+            if parsed.scheme not in ("http", "https") or not parsed.netloc:
+                bad.append(f"#{row['id']} {str(row['link'])[:80]}")
+        if bad:
+            findings.append(Finding(
+                ERROR, "malformed_url",
+                f"{table}.{label} contains values that are not usable links.",
+                bad, "Every displayed source must link to something openable."))
+    return findings
+
+
+def check_schema_consistency() -> List[Finding]:
+    """A fresh database and an upgraded one must have the same shape."""
+    from database.db import SCHEMA_FILE, get_connection, table_columns
+
+    connection = get_connection()
+    findings: List[Finding] = []
+    legacy = [
+        ("events", "status", "superseded by event_status"),
+        ("fight_card_items", "confidence", "superseded by evidence_level"),
+    ]
+    stale = [f"{table}.{column} ({why})" for table, column, why in legacy
+             if column in table_columns(connection, table)]
+    if stale:
+        findings.append(Finding(
+            ERROR, "legacy_schema",
+            "Legacy columns survive in this database that a fresh one does not have.",
+            stale,
+            "Restart the app so migration 5 runs, or check why the column could not be "
+            "dropped (an index or view on it will block it)."))
+
+    # Every table in schema.sql must exist here.
+    expected = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)",
+                              SCHEMA_FILE.read_text(encoding="utf-8")))
+    missing = sorted(name for name in expected if not table_columns(connection, name))
+    if missing:
+        findings.append(Finding(
+            ERROR, "missing_tables", "Tables in schema.sql are missing from this database.",
+            missing, "Restart the app; the schema is applied on every start."))
+    return findings
+
+
+def check_dead_settings() -> List[Finding]:
+    """Settings stored but read by nothing."""
+    known_dead = ["auto_collect_on_start"]
+    rows = query_all(
+        "SELECT key FROM settings WHERE key IN ({})".format(
+            ",".join("?" * len(known_dead))), tuple(known_dead))
+    if not rows:
+        return []
+    return [Finding(
+        WARN, "dead_setting", "Settings are stored that nothing reads.",
+        [row["key"] for row in rows],
+        "Migration 5 removes these. Restart the app.")]
+
+
+def check_source_health_reconciles() -> List[Finding]:
+    """The Source health counts must add up to the number of sources."""
+    from database import repo_sources as sources_repo
+
+    summary = sources_repo.health_summary()
+    if sum(summary["counts"].values()) == summary["total"]:
+        return []
+    return [Finding(
+        ERROR, "source_health_mismatch",
+        "Source health states do not account for every source.",
+        [f"{state}: {count}" for state, count in summary["counts"].items()],
+        "database/repo_sources.health_state must be exhaustive.")]
+
+
 def check_orphan_fights() -> List[Finding]:
+
     rows = query_all(
         "SELECT f.id, f.fighter_a, f.fighter_b FROM fight_card_items f "
         "LEFT JOIN events e ON e.id = f.event_id WHERE e.id IS NULL")
@@ -331,6 +482,13 @@ CHECKS = [
     check_rankings,
     check_official_conflicts,
     check_orphan_fights,
+    check_source_counts,
+    check_bout_status_contradictions,
+    check_article_intent,
+    check_malformed_urls,
+    check_schema_consistency,
+    check_dead_settings,
+    check_source_health_reconciles,
 ]
 
 

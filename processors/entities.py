@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-from database.repo_entities import list_fighters
+from database.repo_entities import all_events, list_fighters
 from utils.textutil import collapse_whitespace, normalize_text
 from utils.timeutil import utcnow_iso
 
@@ -64,6 +64,57 @@ class FighterIndex:
 _INDEX: Optional[FighterIndex] = None
 
 
+@dataclass
+class EventIndex:
+    """Every event name the app already knows, for matching in free text.
+
+    The regex patterns above only recognise the shapes UFC currently uses. An
+    event the app has already stored - from the official schedule, from a
+    merge alias, or from demo data - must be recognised by its own name too,
+    otherwise a story whose headline plainly names the event is reported as
+    "no event has been named in the collected sources".
+    """
+
+    by_phrase: Dict[str, str] = field(default_factory=dict)   # normalized -> display
+    built_at: str = ""
+
+    @property
+    def size(self) -> int:
+        return len(set(self.by_phrase.values()))
+
+
+_EVENT_INDEX: Optional[EventIndex] = None
+
+#: Shorter than this and a name is too generic to match safely ("UFC").
+MIN_EVENT_PHRASE_CHARS = 5
+
+
+def build_event_index(events: Optional[List[Dict[str, Any]]] = None) -> EventIndex:
+    rows = events if events is not None else all_events()
+    index = EventIndex(built_at=utcnow_iso())
+    for row in rows:
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        for phrase in (name, row.get("short_name")):
+            normalized = normalize_text(str(phrase or ""))
+            if len(normalized) >= MIN_EVENT_PHRASE_CHARS:
+                index.by_phrase.setdefault(normalized, name)
+    return index
+
+
+def get_event_index(refresh: bool = False) -> EventIndex:
+    global _EVENT_INDEX
+    if _EVENT_INDEX is None or refresh:
+        _EVENT_INDEX = build_event_index()
+    return _EVENT_INDEX
+
+
+def reset_event_index() -> None:
+    global _EVENT_INDEX
+    _EVENT_INDEX = None
+
+
 def build_fighter_index(fighters: Optional[List[Dict[str, Any]]] = None) -> FighterIndex:
     """Build the phrase -> fighter lookup from the fighters table."""
     rows = fighters if fighters is not None else list_fighters(limit=5000)
@@ -105,13 +156,48 @@ def get_fighter_index(refresh: bool = False) -> FighterIndex:
     return _INDEX
 
 
+def reset_indexes() -> None:
+    """Forget both cached indexes - called once per pipeline run."""
+    reset_fighter_index()
+    reset_event_index()
+
+
 def reset_fighter_index() -> None:
+
     global _INDEX
     _INDEX = None
 
 
-def find_fighters(text: str, index: Optional[FighterIndex] = None, limit: int = 8) -> List[str]:
-    """Return the fighters mentioned in ``text``, most prominent first."""
+#: Words that appear either side of "vs." without naming a person. A matchup
+#: pattern alone is not proof of a fighter name, so anything containing one of
+#: these is not learned as a fighter.
+NON_PERSON_TERMS = {
+    "ufc", "fight", "night", "card", "event", "main", "co", "prelims", "title",
+    "belt", "champion", "division", "the", "a", "an", "and", "vs", "versus",
+    "report", "rumor", "rumour", "breaking", "exclusive", "update", "espn",
+    "week", "weekend", "everyone", "everybody", "field", "world",
+}
+
+
+def looks_like_person_name(name: Optional[str]) -> bool:
+    """Conservative check before learning a name from a 'A vs. B' headline."""
+    parts = [part for part in normalize_text(name or "").split() if part]
+    if not (2 <= len(parts) <= 4):
+        return False
+    return not any(part in NON_PERSON_TERMS for part in parts)
+
+
+def find_fighters(text: str, index: Optional[FighterIndex] = None, limit: int = 8,
+                  include_matchups: bool = True) -> List[str]:
+    """Return the fighters mentioned in ``text``, most prominent first.
+
+    ``include_matchups`` also learns both sides of an "A vs. B" headline when
+    neither name is in the registry yet. Without it, a story whose headline
+    names two fighters reports "no fighter detected in the collected text" for
+    as long as those fighters stay unknown - which is how the app ended up
+    stating a matchup as fact and denying it had detected the fighters in it,
+    on the same screen.
+    """
     if not text:
         return []
     index = index or get_fighter_index()
@@ -130,12 +216,30 @@ def find_fighters(text: str, index: Optional[FighterIndex] = None, limit: int = 
         if position >= 0:
             seen.add(name)
             found.append((position, name))
+    if include_matchups:
+        for left, right in find_matchups(text, index):
+            for name in (left, right):
+                if name in seen or not looks_like_person_name(name):
+                    continue
+                seen.add(name)
+                found.append((max(0, haystack.find(f" {normalize_text(name)} ")), name))
     found.sort(key=lambda pair: pair[0])
     return [name for _, name in found[:limit]]
 
 
-def find_events(text: str, known_events: Optional[Iterable[str]] = None) -> List[str]:
-    """Return event names mentioned in ``text`` (e.g. ['UFC 320'])."""
+def find_events(
+    text: str,
+    known_events: Optional[Iterable[str]] = None,
+    index: Optional[EventIndex] = None,
+    use_index: bool = True,
+) -> List[str]:
+    """Return event names mentioned in ``text`` (e.g. ['UFC 320']).
+
+    Three sources, in order: the name patterns, any event names the caller
+    already knows about, and every event already stored in the database. The
+    last of these is what lets an event the regexes do not recognise still be
+    found in a headline that names it.
+    """
     if not text:
         return []
     results: List[str] = []
@@ -149,9 +253,18 @@ def find_events(text: str, known_events: Optional[Iterable[str]] = None) -> List
             name = collapse_whitespace(name.replace("{0}", "").replace("{1}", ""))
             if name and name not in results:
                 results.append(name)
+    haystack = f" {normalize_text(text)} "
     for known in known_events or []:
-        if known and normalize_text(known) in normalize_text(text) and known not in results:
+        if known and normalize_text(known) in haystack and known not in results:
             results.append(known)
+    if use_index:
+        try:
+            index = index or get_event_index()
+        except Exception:  # no database available (unit tests on raw text)
+            index = EventIndex()
+        for phrase, name in index.by_phrase.items():
+            if phrase in haystack and name not in results:
+                results.append(name)
     return results[:4]
 
 

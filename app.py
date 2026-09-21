@@ -15,6 +15,7 @@ obvious.
 """
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
@@ -29,11 +30,15 @@ st.set_page_config(
     page_title="UFC News Radar",
     page_icon="\U0001F94A",
     layout="wide",
-    initial_sidebar_state="expanded",
+    # "auto" is the only honest answer on a phone: "expanded" forces the menu
+    # open on every screen size, and at 430px it covers most of the feed the
+    # reader came for. Streamlit collapses it on narrow viewports and leaves
+    # it open on a desktop.
+    initial_sidebar_state="auto",
 )
 
 from ai import service as ai_service                      # noqa: E402
-from database import repo_settings as settings_repo       # noqa: E402
+from database import repo_runs as runs_repo               # noqa: E402
 from database import repo_stories as stories_repo         # noqa: E402
 from database.db import init_db                           # noqa: E402
 from database.demo_data import demo_data_present          # noqa: E402
@@ -50,23 +55,42 @@ from utils.timeutil import humanize_age                   # noqa: E402
 
 @st.cache_resource(show_spinner=False)
 def bootstrap() -> bool:
-    """Create/upgrade the database once per Streamlit process."""
+    """Create/upgrade the database once per Streamlit process.
+
+    Also starts the in-app background collector, but only if it has been
+    switched on in Settings. Collection is never something the app begins
+    doing on its own, and the collector that keeps working when the app is
+    closed is ``scripts/scheduler.py`` - see ``collectors/scheduler.py``.
+    """
     configure_logging()
     init_db()
+    try:
+        from collectors import scheduler
+        from database.backends import postgres_url
+        from database.db import current_db_path
+
+        scheduler.start(database_path=current_db_path(), database_url=postgres_url())
+    except Exception:  # a background helper must never stop the app starting
+        logging.getLogger(__name__).exception("Background collector could not start")
     return True
 
 
 def run_collection() -> None:
-    """Collect from every enabled source, then reprocess and rerun the page."""
+    """Collect from every enabled source, then reprocess and rerun the page.
+
+    The toast is not the report: toasts auto-dismiss, and a 2-minute run means
+    the user is very likely looking elsewhere when it lands. The durable
+    statement of what the run achieved is the status bar and the banner the
+    dashboard renders from ``repo_runs.collection_status()``.
+    """
     from collectors.runner import run_collection as collect
 
     with st.spinner("Collecting from sources..."):
         result = collect(trigger="manual")
-    if result.sources_ok:
-        st.toast(result.summary_line, icon="✅")
-    if result.sources_failed:
-        st.toast(f"{result.sources_failed} source(s) failed - see Source health", icon="⚠️")
+    icon = {"SUCCESS": "✅", "PARTIAL": "⚠️", "TOTAL_FAILURE": "❌"}.get(result.outcome, "ℹ️")
+    st.toast(result.headline, icon=icon)
     st.session_state["last_run_summary"] = result.summary_line
+    st.session_state["last_run_outcome"] = result.outcome
     st.session_state["last_run_errors"] = result.errors[:6]
     st.rerun()
 
@@ -120,6 +144,21 @@ def page_settings() -> None:
     settings.render()
 
 
+def page_dashboard_alias() -> None:
+    """Serve a bookmarked ``/dashboard`` link.
+
+    Streamlit's default page always lives at ``/`` - ``st.Page.url_path``
+    returns "" for it by design - so a request for ``/dashboard`` resolves to
+    nothing and raises a visible "the page you have requested does not seem to
+    exist" dialog over the dashboard it then renders anyway.
+
+    ``/`` is therefore the canonical dashboard route, and this hidden page
+    exists only so the obvious URL redirects to it instead of showing an
+    error. It is not in the menu and never renders anything itself.
+    """
+    st.switch_page(PAGES["dashboard"])
+
+
 def sidebar_extras() -> None:
     """Refresh, search and live status. Deliberately short - the sidebar is for
     getting somewhere, not for running the application."""
@@ -131,23 +170,28 @@ def sidebar_extras() -> None:
                              label_visibility="collapsed")
         if term and term != st.session_state.get("_last_global_search"):
             st.session_state["_last_global_search"] = term
-            st.query_params["q"] = term
-            st.switch_page(PAGES["search"])
+            nav.open_search(term)
 
         st.divider()
-        last_collection = settings_repo.get_setting("last_collection_at", "")
+        status = runs_repo.collection_status()
         x_status = x_status_panel()
         ai_status = ai_service.ai_status()
         counts = stories_repo.dashboard_counts()
+        # A failed run is stated here too, in the same words as the dashboard
+        # banner, so the sidebar can never look reassuring while the feed is
+        # stale.
         st.markdown(
             f'<div style="font-size:0.76rem;color:#96a0b0;line-height:1.7">'
-            f'<b style="color:#e8eaed">Last collection</b><br>'
-            f'{humanize_age(last_collection) if last_collection else "never"}<br><br>'
+            f'<b style="color:{status["color"]}">{status["emoji"]} {status["label"]}</b><br>'
+            f'{status["sources_ok"]}/{status["sources_attempted"]} sources OK<br>'
+            f'<b style="color:#e8eaed">Data from</b><br>'
+            f'{humanize_age(status["succeeded_at"]) if status["succeeded_at"] else "never collected"}'
+            f'<br><br>'
             f'<b style="color:#e8eaed">Stories</b><br>{counts["total"]} tracked · '
             f'{counts["new"]} new (24h)<br><br>'
             f'<b style="color:#e8eaed">X API</b><br>'
             + ("✅ configured" if x_status["configured"] else "⚪ not configured")
-            + f'<br><br><b style="color:#e8eaed">AI</b><br>'
+            + '<br><br><b style="color:#e8eaed">AI</b><br>'
             + ("🟢 " + str(ai_status["active"]) if ai_status["configured"]
                else "⚪ template mode")
             + ("<br><br>\U0001F7E3 demo data loaded" if demo_data_present() else "")
@@ -155,33 +199,64 @@ def sidebar_extras() -> None:
             unsafe_allow_html=True,
         )
         if st.session_state.get("last_run_errors"):
-            with st.expander("Last run issues"):
+            with st.expander("Last run issues", expanded=status["needs_attention"]):
                 for error in st.session_state["last_run_errors"]:
                     st.caption(error)
 
 
+#: The URL each page answers to. Declared here rather than read back off the
+#: ``st.Page`` objects so the routing contract is visible in one place and can
+#: be asserted in tests without a running Streamlit server.
+#:
+#: The dashboard is the default page, which Streamlit always serves at "/" -
+#: ``st.Page.url_path`` returns "" for it whatever is passed in. "home" is
+#: therefore only an internal identifier, and "dashboard" belongs to the
+#: hidden alias page that redirects to "/".
+PAGE_URL_PATHS = {
+    "dashboard": "home",
+    "x_radar": "x-radar",
+    "research": "research",
+    "tiktok": "tiktok-studio",
+    "events": "events",
+    "fighters": "fighters",
+    "rankings": "rankings",
+    "cards": "card-changes",
+    "watchlists": "watchlists",
+    "search": "search",
+    "sources": "sources",
+    "settings": "settings",
+    "dashboard_alias": "dashboard",
+}
+
+#: The canonical route for the dashboard. Bookmarking "/dashboard" works, but
+#: it redirects here rather than being a second URL for the same page.
+CANONICAL_DASHBOARD_PATH = "/"
+
 PAGES = {
     "dashboard": st.Page(page_dashboard, title="Dashboard", icon="\U0001F4F0",
-                         url_path="dashboard", default=True),
+                         url_path=PAGE_URL_PATHS["dashboard"], default=True),
     "x_radar": st.Page(page_x_radar, title="X / Twitter Radar", icon="\U0001F426",
-                       url_path="x-radar"),
+                       url_path=PAGE_URL_PATHS["x_radar"]),
     "research": st.Page(page_research, title="Research & Verification", icon="\U0001F50E",
-                        url_path="research"),
+                        url_path=PAGE_URL_PATHS["research"]),
     "tiktok": st.Page(page_tiktok, title="TikTok Studio", icon="\U0001F3AC",
-                      url_path="tiktok-studio"),
-    "events": st.Page(page_events, title="Events", icon="\U0001F4C5", url_path="events"),
-    "fighters": st.Page(page_fighters, title="Fighters", icon="\U0001F94A", url_path="fighters"),
-    "rankings": st.Page(page_rankings, title="Rankings", icon="\U0001F3C6", url_path="rankings"),
+                      url_path=PAGE_URL_PATHS["tiktok"]),
+    "events": st.Page(page_events, title="Events", icon="\U0001F4C5", url_path=PAGE_URL_PATHS["events"]),
+    "fighters": st.Page(page_fighters, title="Fighters", icon="\U0001F94A", url_path=PAGE_URL_PATHS["fighters"]),
+    "rankings": st.Page(page_rankings, title="Rankings", icon="\U0001F3C6", url_path=PAGE_URL_PATHS["rankings"]),
     "cards": st.Page(page_card_changes, title="Fight card changes", icon="\U0001F5D3",
-                     url_path="card-changes"),
-    "watchlists": st.Page(page_watchlists, title="Watchlists", icon="⭐", url_path="watchlists"),
-    "search": st.Page(page_search, title="Search", icon="\U0001F50D", url_path="search"),
-    "sources": st.Page(page_sources, title="Source health", icon="\U0001F6E0", url_path="sources"),
-    "settings": st.Page(page_settings, title="Settings", icon="⚙", url_path="settings"),
+                     url_path=PAGE_URL_PATHS["cards"]),
+    "watchlists": st.Page(page_watchlists, title="Watchlists", icon="⭐", url_path=PAGE_URL_PATHS["watchlists"]),
+    "search": st.Page(page_search, title="Search", icon="\U0001F50D", url_path=PAGE_URL_PATHS["search"]),
+    "sources": st.Page(page_sources, title="Source health", icon="\U0001F6E0", url_path=PAGE_URL_PATHS["sources"]),
+    "settings": st.Page(page_settings, title="Settings", icon="⚙", url_path=PAGE_URL_PATHS["settings"]),
+    "dashboard_alias": st.Page(page_dashboard_alias, title="Dashboard", icon="\U0001F4F0",
+                               url_path=PAGE_URL_PATHS["dashboard_alias"], visibility="hidden"),
 }
 
 NAVIGATION = {
-    "News": [PAGES["dashboard"], PAGES["x_radar"], PAGES["research"], PAGES["tiktok"]],
+    "News": [PAGES["dashboard"], PAGES["dashboard_alias"], PAGES["x_radar"],
+             PAGES["research"], PAGES["tiktok"]],
     "Reference": [PAGES["events"], PAGES["fighters"], PAGES["rankings"], PAGES["cards"]],
     "Tools": [PAGES["watchlists"], PAGES["search"], PAGES["sources"], PAGES["settings"]],
 }
@@ -193,12 +268,15 @@ nav.register(PAGES)
 def main() -> None:
     inject_css()
     bootstrap()
-    st.markdown(
-        '<div style="font-size:1.15rem;font-weight:800;letter-spacing:2px;padding:2px 0 10px 4px">'
-        'UFC NEWS <span style="color:#ff3b3b">RADAR</span></div>',
-        unsafe_allow_html=True,
-    )
     page = st.navigation(NAVIGATION, position="sidebar")
+
+    # The app name, once per screen. The dashboard's own heading already says
+    # it in full, so repeating it there was both duplication and the line that
+    # sat clipped under the toolbar.
+    if (page.url_path or "") != "":
+        st.markdown('<div class="brandline">UFC NEWS <span>RADAR</span></div>',
+                    unsafe_allow_html=True)
+
 
     # Item parameters ("?story=12", "?event_id=3") belong to the page that set
     # them. Two cases have to be told apart:
@@ -216,19 +294,28 @@ def main() -> None:
     # item URL. Both should open the item rather than drop it.
     same_page = previous is None or previous == current
 
-    for parameter, owners, target in (
-        ("story", ("research", "tiktok-studio"), "research"),
-        ("event_id", ("events",), "events"),
-        ("name", ("fighters",), "fighters"),
-    ):
+    for parameter, owners, target in nav.ITEM_OWNERS:
         if current in owners or nav.selection(parameter) is None:
             continue
         if same_page and st.query_params.get(parameter):
+            nav.remember(parameter)
             st.switch_page(PAGES[target])
         nav.clear_items(parameter)
 
+
     sidebar_extras()
     page.run()
+
+    # Put the open item back in the address bar, after the page has rendered.
+    # ``st.switch_page`` navigates without carrying the query string, which is
+    # why an opened story used to sit at "/" with no parameters and could not
+    # be refreshed, bookmarked or shared. Writing the parameter only updates
+    # the URL - it does not rerun the script - and doing it last means the
+    # browser applies it to the page it has already navigated to, instead of
+    # leaving a history entry for a URL that never existed.
+    for parameter, owners, _target in nav.ITEM_OWNERS:
+        if current in owners:
+            nav.sync_url(parameter)
 
 
 if __name__ == "__main__":

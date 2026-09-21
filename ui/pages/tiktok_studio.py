@@ -15,7 +15,7 @@ import streamlit as st
 from ai import service as ai_service
 from ai.context import build_story_context
 from database import repo_stories as stories_repo
-from models.types import status_style
+from models.types import source_count_line, status_style
 from ui import nav
 from ui.cards import esc, status_badge
 from ui.components import bullet_list, notice, page_header, section_header, source_list
@@ -75,8 +75,7 @@ def render() -> None:
     st.markdown(status_badge(story.get("status")), unsafe_allow_html=True)
     page_header(esc(story.get("headline") or "Story"),
                 f"Updated {humanize_age(story.get('last_updated_at'))} · "
-                f"{int(story.get('source_count') or 0)} source(s) · "
-                f"{int(story.get('independent_source_count') or 0)} independent",
+                f"{esc(source_count_line(story))}",
                 story_style=True)
 
     if story.get("is_demo"):
@@ -140,18 +139,25 @@ def _research_column(story_id: int, story: Dict[str, Any], context: Any) -> None
 
     check = ai_service.generate_reporting_check(story_id)
     st.markdown("**CHECK BEFORE REPORTING**")
+    # Each heading answers a different question and the lists no longer
+    # overlap: "Not safe to state" is about sourcing strength, "Still unknown"
+    # is about details the sources never covered. They used to be the same
+    # list printed twice under two names.
     headings = [
         ("confirmed_facts", "✅ Safe to state as fact"),
         ("reported_claims", "\U0001F7E1 Must be attributed"),
-        ("unconfirmed", "⚪ Not safe to state as fact"),
+        ("unconfirmed", "⚪ Not safe to state as fact (sourcing)"),
         ("conflicting", "\U0001F7E3 Sources disagree"),
-        ("missing", "❔ Still unknown"),
+        ("missing", "❔ Still unknown (not covered by the sources)"),
     ]
+    shown: set = set()
     for key, label in headings:
-        lines = check.sections.get(key) or []
+        lines = [line for line in (check.sections.get(key) or []) if line[2:] not in shown]
+        shown.update(line[2:] for line in lines)
         if lines:
             st.markdown(f"*{label}*")
             bullet_list(lines)
+
 
     with st.expander("Key facts", expanded=True):
         bullet_list(ai_service.key_facts(story_id))

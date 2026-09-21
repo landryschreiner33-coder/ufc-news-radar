@@ -18,6 +18,7 @@ from database import repo_entities as entities_repo
 from database import repo_runs as runs_repo
 from database import repo_settings as settings_repo
 from database import repo_sources as sources_repo
+from models.types import CollectionOutcome, collection_outcome_for, collection_outcome_style
 from processors import pipeline
 from processors.rankings_diff import SnapshotResult, store_snapshot
 from utils.http import HttpClient
@@ -60,6 +61,30 @@ class RunResult:
     outcomes: List[SourceOutcome] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
+
+    @property
+    def outcome(self) -> str:
+        """SUCCESS / PARTIAL / TOTAL_FAILURE / NOT_RUN - never assumed."""
+        return collection_outcome_for(self.sources_attempted, self.sources_ok)
+
+    @property
+    def collected_anything(self) -> bool:
+        return self.sources_ok > 0
+
+    @property
+    def headline(self) -> str:
+        """The one line the interface leads with. Never claims a false update."""
+        style = collection_outcome_style(self.outcome)
+        if self.outcome == CollectionOutcome.NOT_RUN.value:
+            return f"{style.emoji} {style.label} - no sources were enabled to collect from."
+        if self.outcome == CollectionOutcome.TOTAL_FAILURE.value:
+            return (f"{style.emoji} {style.label} - 0 of {self.sources_attempted} sources "
+                    "returned. Nothing was updated; what is on screen may be stale.")
+        if self.outcome == CollectionOutcome.PARTIAL.value:
+            return (f"{style.emoji} {style.label} - {self.sources_ok} of "
+                    f"{self.sources_attempted} sources succeeded, {self.sources_failed} failed.")
+        return (f"{style.emoji} {style.label} - all {self.sources_attempted} sources "
+                "returned.")
 
     @property
     def summary_line(self) -> str:
@@ -169,11 +194,18 @@ def run_collection(
         stories_updated=result.stories_updated,
         social_new=result.social_new,
         duration_ms=result.duration_ms,
+        outcome=result.outcome,
         notes="; ".join(result.notes) if result.notes else None,
         error="; ".join(result.errors[:5]) if result.errors else None,
     )
-    settings_repo.set_setting("last_collection_at", result.finished_at, "str")
-    logger.info("Collection run finished: %s", result.summary_line)
+    # Two different facts, stored separately on purpose. "We tried" is not
+    # "we got something": a run where every source failed must never make the
+    # interface say the data was just updated.
+    settings_repo.set_setting("last_collection_attempt_at", result.finished_at, "str")
+    settings_repo.set_setting("last_collection_outcome", result.outcome, "str")
+    if result.collected_anything:
+        settings_repo.set_setting("last_collection_at", result.finished_at, "str")
+    logger.info("Collection run finished: %s (%s)", result.summary_line, result.outcome)
     return result
 
 

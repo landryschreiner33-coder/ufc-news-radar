@@ -42,7 +42,22 @@ _CATEGORY_ART: Dict[str, tuple] = {
     Category.GENERAL.value: ("UFC NEWS", "#71717a", "●"),
 }
 
-_DEFAULT_ART = ("UFC NEWS", "#71717a", "●")
+_DEFAULT_ART = ("NEWS IMAGE UNAVAILABLE", "#71717a", "●")
+
+#: What a placeholder is standing in for. The label has to match the thing on
+#: screen: an event card captioned "CARD CHANGE" tells the reader something
+#: about the event that is simply not true.
+KIND_EVENT = "event"
+KIND_FIGHTER = "fighter"
+KIND_NEWS = "news"
+KIND_CARD_CHANGE = "card_change"
+
+_KIND_ART: Dict[str, tuple] = {
+    KIND_EVENT: ("UFC EVENT", "#3b82f6", "▣"),
+    KIND_FIGHTER: ("FIGHTER IMAGE UNAVAILABLE", "#64748b", "◍"),
+    KIND_NEWS: _DEFAULT_ART,
+    KIND_CARD_CHANGE: ("CARD CHANGE", "#f59e0b", "↻"),
+}
 
 #: Hosts that serve tracking pixels or logos rather than article imagery.
 _BLOCKED_IMAGE_HOSTS = {
@@ -69,13 +84,22 @@ def is_usable_image(url: Optional[str]) -> bool:
     return True
 
 
-def placeholder_for(category: Optional[str], headline: str = "") -> str:
-    """A generic category graphic as an inline SVG data URI.
+def placeholder_for(category: Optional[str] = None, headline: str = "",
+                    kind: str = KIND_NEWS) -> str:
+    """A generic graphic as an inline SVG data URI.
 
     Deliberately abstract: no faces, no fight imagery, nothing that could be
     mistaken for a photograph of the people in the story.
+
+    ``kind`` says what the image stands in for. For a news card the story's
+    own category gives a more useful label ("INJURY"), so it wins; for an
+    event, a fighter or a card change the kind decides, because borrowing
+    another kind's label makes a false statement about the subject.
     """
-    label, accent, glyph = _CATEGORY_ART.get(str(category or ""), _DEFAULT_ART)
+    if kind != KIND_NEWS:
+        label, accent, glyph = _KIND_ART[kind]
+    else:
+        label, accent, glyph = _CATEGORY_ART.get(str(category or ""), _DEFAULT_ART)
     svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 210" width="400" height="210" role="img" aria-label="Generic {label} graphic - not a photograph">
   <defs>
     <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
@@ -115,7 +139,8 @@ def image_for_story(story: Dict[str, Any], event: Optional[Dict[str, Any]] = Non
                 "caption": f"Event image: {event.get('name')}"}
 
     return {
-        "url": placeholder_for(story.get("category"), story.get("headline") or ""),
+        "url": placeholder_for(story.get("category"), story.get("headline") or "",
+                               kind=KIND_NEWS),
         "is_placeholder": True,
         "caption": "Generic graphic - no image was collected with this story",
     }
@@ -125,9 +150,17 @@ def image_for_event(event: Dict[str, Any]) -> Dict[str, Any]:
     if is_usable_image(event.get("image_url")):
         return {"url": event["image_url"], "is_placeholder": False,
                 "caption": event.get("name") or "Event image"}
-    return {"url": placeholder_for(Category.EVENT_CHANGE.value, event.get("name") or ""),
+    return {"url": placeholder_for(headline=event.get("name") or "", kind=KIND_EVENT),
             "is_placeholder": True,
             "caption": "Generic graphic - no event image was collected"}
+
+
+def image_for_card_change(change: Dict[str, Any]) -> Dict[str, Any]:
+    """Artwork for a fight-card change entry."""
+    return {"url": placeholder_for(headline=change.get("after_text") or "",
+                                   kind=KIND_CARD_CHANGE),
+            "is_placeholder": True,
+            "caption": "Generic graphic - fight card change"}
 
 
 def image_for_fighter(fighter: Dict[str, Any]) -> Dict[str, Any]:

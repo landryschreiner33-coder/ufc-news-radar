@@ -4,8 +4,13 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from database.db import execute, json_dump, query_all, query_one, rows_to_dicts
+from models.types import (
+    CollectionOutcome,
+    collection_outcome_for,
+    collection_outcome_style,
+)
 from utils.textutil import sha1
-from utils.timeutil import minutes_between, utcnow_iso
+from utils.timeutil import humanize_age, minutes_between, utcnow_iso
 
 
 def start_run(trigger: str = "manual") -> int:
@@ -22,16 +27,90 @@ def finish_run(run_id: int, **stats: Any) -> None:
             "stories_new", "stories_updated", "social_new", "duration_ms",
         )
     }
+    # The outcome is derived from the run's own numbers rather than trusted
+    # from the caller, so a run can never be recorded as a success it was not.
+    outcome = collection_outcome_for(int(fields["sources_attempted"]), int(fields["sources_ok"]))
     assignments = ", ".join(f"{key} = ?" for key in fields)
     execute(
-        f"UPDATE collection_runs SET finished_at = ?, {assignments}, notes = ?, error = ? WHERE id = ?",
-        (utcnow_iso(), *fields.values(), stats.get("notes"), stats.get("error"), run_id),
+        f"UPDATE collection_runs SET finished_at = ?, {assignments}, outcome = ?, "
+        "notes = ?, error = ? WHERE id = ?",
+        (utcnow_iso(), *fields.values(), outcome, stats.get("notes"), stats.get("error"), run_id),
     )
 
 
 def last_run() -> Optional[Dict[str, Any]]:
     row = query_one("SELECT * FROM collection_runs ORDER BY id DESC LIMIT 1")
     return dict(row) if row else None
+
+
+def last_successful_run() -> Optional[Dict[str, Any]]:
+    """The newest run in which at least one source returned."""
+    row = query_one(
+        "SELECT * FROM collection_runs WHERE sources_ok > 0 ORDER BY id DESC LIMIT 1")
+    return dict(row) if row else None
+
+
+def collection_status() -> Dict[str, Any]:
+    """What the interface must say about the state of the data.
+
+    This is the single answer to "is what I am looking at current?", and it is
+    built from the recorded runs rather than from the fact that a button was
+    pressed. A run where every source failed reports TOTAL_FAILURE and the
+    freshness stamp stays at the last run that actually returned something.
+    """
+    run = last_run()
+    successful = last_successful_run()
+    if run is None:
+        style = collection_outcome_style(CollectionOutcome.NOT_RUN.value)
+        return {
+            "outcome": CollectionOutcome.NOT_RUN.value,
+            "emoji": style.emoji, "label": style.label, "color": style.color,
+            "headline": "No collection has run yet.",
+            "detail": "Press Refresh now to pull from every enabled source.",
+            "sources_ok": 0, "sources_attempted": 0, "sources_failed": 0,
+            "attempted_at": None, "succeeded_at": None,
+            "is_stale": False, "needs_attention": False,
+        }
+
+    outcome = run.get("outcome") or collection_outcome_for(
+        int(run.get("sources_attempted") or 0), int(run.get("sources_ok") or 0))
+    style = collection_outcome_style(outcome)
+    attempted = int(run.get("sources_attempted") or 0)
+    ok = int(run.get("sources_ok") or 0)
+    failed = int(run.get("sources_failed") or 0)
+    succeeded_at = (successful or {}).get("finished_at") or (successful or {}).get("started_at")
+
+    if outcome == CollectionOutcome.TOTAL_FAILURE.value:
+        headline = f"{style.emoji} COLLECTION FAILED - 0 of {attempted} sources returned."
+        detail = (
+            "Nothing was updated on the last run. "
+            + (f"The newest data is from {humanize_age(succeeded_at)}."
+               if succeeded_at else "No source has ever returned successfully.")
+            + " Open Source health to see exactly which source failed and why."
+        )
+    elif outcome == CollectionOutcome.PARTIAL.value:
+        headline = f"{style.emoji} PARTIAL UPDATE - {ok} of {attempted} sources succeeded."
+        detail = (f"{failed} source(s) failed, so the feed may be missing stories. "
+                  "Source health lists each failure.")
+    elif outcome == CollectionOutcome.NOT_RUN.value:
+        headline = f"{style.emoji} NOT RUN - no enabled sources to collect from."
+        detail = "Enable at least one source on the Source health page."
+    else:
+        headline = f"{style.emoji} Collection OK - all {attempted} sources returned."
+        detail = f"Last updated {humanize_age(succeeded_at)}."
+
+    return {
+        "outcome": outcome,
+        "emoji": style.emoji, "label": style.label, "color": style.color,
+        "headline": headline, "detail": detail,
+        "sources_ok": ok, "sources_attempted": attempted, "sources_failed": failed,
+        "attempted_at": run.get("finished_at") or run.get("started_at"),
+        "succeeded_at": succeeded_at,
+        "error": run.get("error"),
+        "is_stale": outcome == CollectionOutcome.TOTAL_FAILURE.value,
+        "needs_attention": outcome in (CollectionOutcome.TOTAL_FAILURE.value,
+                                       CollectionOutcome.PARTIAL.value),
+    }
 
 
 def recent_runs(limit: int = 20) -> List[Dict[str, Any]]:

@@ -26,6 +26,8 @@ from utils.timeutil import to_iso, utcnow
 logger = get_logger(__name__)
 
 DEMO_PREFIX = "[DEMO]"
+#: The fictional event every demo booking story is about.
+DEMO_EVENT_NAME = "DEMO FIGHT NIGHT 1"
 DEMO_BANNER = (
     "DEMO DATA IS LOADED. These stories are fictional examples used to try the interface. "
     "They are not real UFC news. Remove them from Settings when you are done."
@@ -36,6 +38,12 @@ def _hours_ago(hours: float) -> str:
     from datetime import timedelta
 
     return to_iso(utcnow() - timedelta(hours=hours))  # type: ignore[return-value]
+
+
+def _days_ahead(days: float) -> str:
+    from datetime import timedelta
+
+    return to_iso(utcnow() + timedelta(days=days))  # type: ignore[return-value]
 
 
 def _demo_articles() -> List[Dict[str, Any]]:
@@ -140,12 +148,38 @@ def _demo_posts() -> List[Dict[str, Any]]:
     ]
 
 
+def _demo_event_id() -> int:
+    """Register the fictional event the demo stories are about.
+
+    The official UFC schedule collector creates the event row for real data;
+    demo mode has no collector, so it registers its own. Without it the demo
+    stories name an event in every headline that the app has no row for, and
+    the research page reports "no event has been named in the collected
+    sources" underneath a headline that names one.
+    """
+    from database import repo_entities as entities_repo
+    from processors.entities import reset_event_index
+
+    event_id = entities_repo.upsert_event(
+        DEMO_EVENT_NAME,
+        event_date=_days_ahead(14)[:10],
+        location="Demo Arena, Demo City (fictional)",
+        data_origin="detected",
+    )
+    if event_id:
+        execute("UPDATE events SET is_demo = 1 WHERE id = ?", (event_id,))
+    reset_event_index()
+    return int(event_id or 0)
+
+
 def load_demo_data(run_pipeline: bool = True) -> Dict[str, int]:
     """Insert the demo rows and run them through the normal pipeline."""
     from processors import pipeline
 
+    _demo_event_id()
     articles = [dict(item, is_demo=True, collected_at=item.get("published_at")) for item in _demo_articles()]
     stats = pipeline.ingest_articles(articles)
+
 
     posts_stored = 0
     for post in _demo_posts():

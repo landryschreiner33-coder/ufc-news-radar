@@ -35,7 +35,13 @@ DEVELOPING_WINDOW_HOURS = 12
 
 @dataclass
 class SourceEvidence:
-    """One independent voice behind a story."""
+    """One independent voice behind a story.
+
+    ``kind`` is the distinction the whole counting model rests on: a *news
+    source* is a publication that ran a report; a *social signal* is an X post.
+    A post is worth showing next to the reporting, but it is not a news outlet
+    and must never be counted as one - see ``VerificationResult``.
+    """
 
     group: str
     name: str
@@ -43,6 +49,7 @@ class SourceEvidence:
     reliability: float
     derivative: bool = False
     credits: List[str] = field(default_factory=list)
+    kind: str = "news"          # news | social
 
 
 @dataclass
@@ -51,9 +58,20 @@ class VerificationResult:
     reasons: List[str] = field(default_factory=list)
     official_confirmed: bool = False
     official_sources: List[str] = field(default_factory=list)
+    #: Distinct NEWS outlets behind the story (publisher families count once).
+    #: X posts are never included here - they are social signals, not outlets.
     source_count: int = 0
+    #: Those news outlets that report independently (not crediting another
+    #: outlet).  By construction this can never exceed ``source_count``.
     independent_source_count: int = 0
     independent_groups: List[str] = field(default_factory=list)
+    #: Linked X posts, counted and displayed separately from news sources.
+    social_signal_count: int = 0
+    #: Distinct X accounts of a kind normally trusted to report accurately.
+    independent_social_accounts: int = 0
+    #: Official confirmation that came from an official social account rather
+    #: than from a publication, so the interface can say which it was.
+    official_social_accounts: List[str] = field(default_factory=list)
     derivative_count: int = 0
     has_conflict: bool = False
     conflict_notes: List[str] = field(default_factory=list)
@@ -63,6 +81,25 @@ class VerificationResult:
     speculation_score: float = 0.0
     evidence: List[SourceEvidence] = field(default_factory=list)
 
+    @property
+    def news_source_count(self) -> int:
+        """Readable alias - the stored column is ``source_count``."""
+        return self.source_count
+
+    @property
+    def independent_news_source_count(self) -> int:
+        return self.independent_source_count
+
+    @property
+    def corroboration_count(self) -> int:
+        """How many independent voices back the claim, news plus social.
+
+        Used only to decide a status.  It is deliberately NOT displayed as a
+        source count, because an X post is not a news source: mixing the two
+        is exactly what produced "2 sources, 3 independent" on screen.
+        """
+        return self.independent_source_count + self.independent_social_accounts
+
     def as_story_fields(self) -> Dict[str, Any]:
         return {
             "status": self.status,
@@ -70,6 +107,7 @@ class VerificationResult:
             "official_confirmed": self.official_confirmed,
             "source_count": self.source_count,
             "independent_source_count": self.independent_source_count,
+            "social_post_count": self.social_signal_count,
             "has_conflict": self.has_conflict,
             "conflict_notes": self.conflict_notes,
             "is_developing": self.is_developing,
@@ -88,18 +126,38 @@ def evaluate_story(
         result.reasons.append("No sources collected for this story yet.")
         return result
 
-    evidence, official_names, derivative_count = _build_evidence(articles, social_posts)
+    evidence, official_names, official_accounts, derivative_count = _build_evidence(
+        articles, social_posts)
     result.evidence = evidence
     result.derivative_count = derivative_count
-    result.source_count = len(articles) + len(social_posts)
     result.official_sources = official_names
+    result.official_social_accounts = official_accounts
     result.official_confirmed = bool(official_names)
 
-    credible = [item for item in evidence if item.source_type in CREDIBLE_REPORTING_TYPES
-                and not item.derivative]
-    independent_groups = sorted({item.group for item in credible})
+    # News and social are counted separately and never added together. An X
+    # post can corroborate a claim, but it is not a publication, so it can
+    # never turn "two outlets reported this" into "three sources".
+    news = [item for item in evidence if item.kind == "news"]
+    social = [item for item in evidence if item.kind == "social"]
+    result.source_count = len({item.group for item in news})
+    result.social_signal_count = len(social_posts)
+
+    credible_news = [item for item in news
+                     if item.source_type in CREDIBLE_REPORTING_TYPES and not item.derivative]
+    independent_groups = sorted({item.group for item in credible_news})
     result.independent_groups = independent_groups
     result.independent_source_count = len(independent_groups)
+    result.independent_social_accounts = len({
+        item.group for item in social if item.source_type in CREDIBLE_REPORTING_TYPES
+    })
+    # The invariant the interface depends on. Independent outlets are a subset
+    # of all outlets, so this can only fail if the two are computed from
+    # different pools - which is the bug this model exists to prevent.
+    assert result.independent_source_count <= result.source_count, (
+        "independent news sources can never exceed total news sources"
+    )
+    credible = credible_news
+
 
     result.speculation_score = _average_speculation(articles)
     conflict, conflict_notes, credible_disagreement = _detect_conflicts(articles, social_posts)
@@ -119,9 +177,11 @@ def evaluate_story(
 # ----------------------------------------------------------------- helpers --
 def _build_evidence(
     articles: List[Dict[str, Any]], social_posts: List[Dict[str, Any]]
-) -> Tuple[List[SourceEvidence], List[str], int]:
+) -> Tuple[List[SourceEvidence], List[str], List[str], int]:
+    """(evidence, official outlet names, official X accounts, derivative count)."""
     evidence: List[SourceEvidence] = []
     official_names: List[str] = []
+    official_accounts: List[str] = []
     derivative_count = 0
     seen_groups: Set[str] = set()
 
@@ -148,6 +208,7 @@ def _build_evidence(
             reliability=float(article.get("reliability_weight") or 0.3),
             derivative=is_derivative,
             credits=credits,
+            kind="news",
         ))
 
     for post in social_posts:
@@ -155,8 +216,12 @@ def _build_evidence(
         group = f"x:{post.get('username') or post.get('author_id') or 'unknown'}"
         if account_type == SourceType.OFFICIAL.value:
             name = f"@{post.get('username')}"
+            # An official account's own post does confirm what it states, but
+            # it is recorded as an official *account*, not as a news outlet.
             if name not in official_names:
                 official_names.append(name)
+            if name not in official_accounts:
+                official_accounts.append(name)
         if group in seen_groups:
             continue
         seen_groups.add(group)
@@ -165,8 +230,9 @@ def _build_evidence(
             name=f"@{post.get('username') or 'unknown'}",
             source_type=account_type,
             reliability=float(post.get("reliability_weight") or 0.0) or _reliability_of(account_type),
+            kind="social",
         ))
-    return evidence, official_names, derivative_count
+    return evidence, official_names, official_accounts, derivative_count
 
 
 def _reliability_of(source_type: str) -> float:
@@ -279,10 +345,22 @@ def _explain_sources(
         result.reasons.append(
             "Official source in the collected set: " + ", ".join(result.official_sources[:3])
         )
+    if result.official_social_accounts:
+        result.reasons.append(
+            "That official confirmation came from an official X account ("
+            + ", ".join(result.official_social_accounts[:3])
+            + "), not from a publication."
+        )
     if credible:
         names = ", ".join(sorted({item.name for item in credible})[:5])
         result.reasons.append(
-            f"{len(credible)} independent credible source(s): {names}"
+            f"{result.independent_source_count} independent news source(s) of "
+            f"{result.source_count} total: {names}"
+        )
+    if result.social_signal_count:
+        result.reasons.append(
+            f"{result.social_signal_count} X post(s) are linked as social signals. "
+            "They are shown beside the reporting and are never counted as news sources."
         )
     if derivative_count:
         result.reasons.append(
@@ -327,23 +405,28 @@ def _decide_status(
     # DEVELOPING needs a credible source behind it. Low-quality accounts
     # repeating each other - even while contradicting each other - never lift a
     # rumour into a developing story.
-    if result.has_conflict and result.independent_source_count >= 1:
+    #
+    # ``corroboration_count`` is used here rather than the news-source count: a
+    # journalist's X post is a real corroborating voice for deciding a status,
+    # even though it is never *displayed* as a news source.
+    if result.has_conflict and result.corroboration_count >= 1:
         return StoryStatus.DEVELOPING.value
     # DEVELOPING also means "moving AND unresolved": new material is still
     # arriving and the reporting is still hedged. Firm multi-source reporting
     # is REPORTED.
     if (
         result.is_developing
-        and result.independent_source_count >= 1
+        and result.corroboration_count >= 1
         and not result.official_confirmed
         and result.speculation_score >= 0.34
     ):
         return StoryStatus.DEVELOPING.value
 
     origin_type = _origin_type(articles, social_posts)
-    if result.independent_source_count >= 2:
+    if result.corroboration_count >= 2:
         return StoryStatus.REPORTED.value
-    if result.independent_source_count == 1:
+    if result.corroboration_count == 1:
+
         if result.speculation_score >= 0.67 or category == Category.RUMOR.value:
             return StoryStatus.RUMOR.value
         return StoryStatus.REPORTED.value

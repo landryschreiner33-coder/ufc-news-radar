@@ -11,7 +11,14 @@ import re
 from typing import Any, Dict, List, Optional
 
 from ai.context import SourceRef, StoryContext
-from models.types import Category, StoryStatus, category_label, status_badge, status_style
+from models.types import (
+    Category,
+    StoryStatus,
+    category_label,
+    source_counts,
+    status_badge,
+    status_style,
+)
 from utils.textutil import collapse_whitespace, normalize_text, sentences, truncate
 from utils.timeutil import format_display, humanize_age
 
@@ -42,7 +49,35 @@ def spoken_claim(headline: str) -> str:
     return claim
 
 
+#: Phrases that must never reach a finished script. They are what a builder
+#: produces when it has no subject and fills the gap with a word instead of
+#: rewriting the sentence - "The UFC just made it official - this story."
+PLACEHOLDER_PHRASES = (
+    "this story", "that story", "the topic", "this topic",
+    "the event", "this event", "placeholder", "this subject", "the subject",
+)
+
+#: Unfilled format markers. Checked literally, because normalising them would
+#: strip the braces and turn "{event}" into the ordinary word "event".
+PLACEHOLDER_MARKERS = ("{subject}", "{event}", "{fighter}", "{claim}", "{0}", "{1}")
+
+
+def contains_placeholder(text: str) -> bool:
+    """True when generated prose still contains filler instead of a subject."""
+    raw = str(text or "")
+    if any(marker in raw for marker in PLACEHOLDER_MARKERS):
+        return True
+    haystack = f" {normalize_text(raw)} "
+    return any(f" {normalize_text(phrase)} " in haystack for phrase in PLACEHOLDER_PHRASES)
+
+
 def subject_of(context: StoryContext) -> str:
+    """Who or what the story is about, or "" when nothing was collected.
+
+    An empty string is a real answer and callers must handle it by choosing a
+    sentence that needs no subject. Returning a filler word instead is how
+    "That's locked in for this story." ended up in a finished script.
+    """
     fighters = context.fighters
     if len(fighters) >= 2:
         return f"{fighters[0]} and {fighters[1]}"
@@ -50,14 +85,27 @@ def subject_of(context: StoryContext) -> str:
         return fighters[0]
     if context.events:
         return context.events[0]
-    return "this story"
+    return ""
+
+
+def subject_or_claim(context: StoryContext, max_chars: int = 70) -> str:
+    """A subject when one is known, otherwise the claim itself, shortened.
+
+    Never empty: a headline always exists, so there is always something real
+    to talk about even when no fighter or event was detected.
+    """
+    subject = subject_of(context)
+    if subject:
+        return subject
+    claim = truncate(clean_claim(context.headline), max_chars)
+    return claim or "the latest UFC news"
 
 
 # ------------------------------------------------------------- summaries ----
 def build_summary(context: StoryContext) -> str:
     claim = clean_claim(context.headline)
     status = context.status
-    source_count = context.story.get("independent_source_count") or 0
+    independent = source_counts(context.story)["independent"]
     parts: List[str] = []
 
     if status == StoryStatus.CONFIRMED.value and context.official_sources:
@@ -65,7 +113,7 @@ def build_summary(context: StoryContext) -> str:
         parts.append(f"{claim}. This is confirmed in official material from {names}.")
     elif status == StoryStatus.REPORTED.value:
         parts.append(
-            f"{claim}. Reported by {source_count} independent credible source(s); "
+            f"{claim}. Reported by {independent} independent news source(s); "
             "no official confirmation is in the collected sources."
         )
     elif status == StoryStatus.DEVELOPING.value:
@@ -107,11 +155,17 @@ def build_knowledge_breakdown(context: StoryContext) -> Dict[str, List[str]]:
         f"{len(context.articles)} article(s) and {len(context.social_posts)} X post(s) have been "
         f"collected about this, first seen {humanize_age(context.story.get('first_seen_at'))}."
     )
-    independent = context.story.get("independent_source_count") or 0
+    counts = source_counts(context.story)
+    independent = counts["independent"]
     known.append(
-        f"{independent} independent credible source(s) are behind it "
-        f"(copies of the same report are not counted)."
+        f"{independent} of {counts['total']} news source(s) behind it report independently "
+        "(copies of the same report are not counted)."
     )
+    if counts["social"]:
+        known.append(
+            f"{counts['social']} X post(s) are linked as social signals. They sit beside the "
+            "reporting and are never counted as news sources."
+        )
     if context.events:
         known.append(f"The reporting ties this to {', '.join(context.events)}.")
     if context.fighters:
@@ -120,7 +174,8 @@ def build_knowledge_breakdown(context: StoryContext) -> Dict[str, List[str]]:
     if not context.official_sources:
         not_confirmed.append("No official UFC source in the collected material has confirmed this.")
     if independent < 2 and not context.official_sources:
-        not_confirmed.append("Only one credible source so far - it has not been corroborated.")
+        not_confirmed.append(
+            "Only one independent news source so far - it has not been corroborated.")
     derivative = [source for source in context.sources if source.is_derivative]
     if derivative:
         names = ", ".join(sorted({source.name for source in derivative})[:3])
@@ -128,14 +183,18 @@ def build_knowledge_breakdown(context: StoryContext) -> Dict[str, List[str]]:
             f"{len(derivative)} report(s) ({names}) credit another outlet rather than reporting "
             "independently."
         )
-    for gap in missing_details(context):
-        not_confirmed.append(gap)
+    # Gaps ("no weight class in the sources") are a different question from
+    # sourcing strength, and they have their own section. Listing them in both
+    # made "Still unknown" a word-for-word repeat of "Not safe to state as
+    # fact" on the TikTok Studio research column.
+    gaps = missing_details(context)
 
     return {
         "what_we_know": known,
         "what_is_claimed": claimed[:8],
         "what_is_confirmed": confirmed[:8] or ["Nothing here is confirmed by an official source yet."],
         "what_is_not_confirmed": not_confirmed[:8],
+        "what_is_missing": gaps,
         "conflicting": conflicting,
         "why_it_matters": [build_why_it_matters(context)],
     }
@@ -175,6 +234,10 @@ def build_why_it_matters(context: StoryContext) -> str:
     category = context.story.get("category")
     subject = subject_of(context)
     event = context.events[0] if context.events else "the card"
+    if not subject:
+        # Nothing nameable was collected, so say what the story is rather than
+        # filling the gap with a word that means nothing out loud.
+        return _why_it_matters_without_subject(category)
     mapping = {
         Category.FIGHT_ANNOUNCEMENT.value:
             f"A booking involving {subject} sets the direction of {event} and the division around it.",
@@ -198,6 +261,26 @@ def build_why_it_matters(context: StoryContext) -> str:
     )
 
 
+def _why_it_matters_without_subject(category: Optional[str]) -> str:
+    """Why it matters when no fighter or event was detected."""
+    mapping = {
+        Category.FIGHT_ANNOUNCEMENT.value:
+            "A new booking sets the direction of the card and the division around it.",
+        Category.CANCELLATION.value:
+            "A cancellation changes the card and usually starts a replacement search.",
+        Category.REPLACEMENT.value: "A replacement changes the matchup and the shape of the card.",
+        Category.INJURY.value: "An injury affects the next booking and the division below it.",
+        Category.RETIREMENT.value: "A retirement decision closes out a division spot.",
+        Category.SUSPENSION.value: "A suspension takes a fighter out of the picture for a period.",
+        Category.RANKING.value: "Ranking movement changes who is next in line for a title shot.",
+        Category.RESULT.value: "The result changes what comes next in the division.",
+        Category.TITLE.value: "Championship status decides the whole division.",
+        Category.BUSINESS.value: "Business decisions shape the schedule, the broadcast and fighter pay.",
+        Category.CONTROVERSY.value: "It affects reputations and can carry consequences.",
+    }
+    return mapping.get(category, "It is the newest development in the collected sources.")
+
+
 # ------------------------------------------------- check before reporting ---
 def build_reporting_check(context: StoryContext) -> Dict[str, List[str]]:
     breakdown = build_knowledge_breakdown(context)
@@ -208,6 +291,7 @@ def build_reporting_check(context: StoryContext) -> Dict[str, List[str]]:
     reported = [f"⚠️ Reported only: {item}" for item in breakdown["what_is_claimed"][:5]]
     unconfirmed = [f"❌ {item}" for item in breakdown["what_is_not_confirmed"][:6]]
     conflicting = [f"⚔️ {item}" for item in breakdown["conflicting"]]
+    missing = [f"❓ {item}" for item in breakdown["what_is_missing"]]
 
     mistakes: List[str] = []
     status = context.status
@@ -230,17 +314,21 @@ def build_reporting_check(context: StoryContext) -> Dict[str, List[str]]:
             "Several outlets are repeating one original report - do not present that as multiple "
             "independent confirmations."
         )
-    if (context.story.get("independent_source_count") or 0) < 2 and not context.official_sources:
-        mistakes.append("Only one source so far - avoid \"everyone is reporting\" framing.")
+    if source_counts(context.story)["independent"] < 2 and not context.official_sources:
+        mistakes.append(
+            "Only one independent news source so far - avoid \"everyone is reporting\" framing."
+        )
     mistakes.append("Never read out a quote you have not seen in one of the linked sources.")
 
     return {
         "confirmed_facts": confirmed or ["Nothing in the collected sources is officially confirmed."],
         "reported_claims": reported or ["No credible-outlet reporting has been collected yet."],
-        "unconfirmed": unconfirmed or ["No obvious gaps detected."],
+        "unconfirmed": unconfirmed or ["Nothing further to flag about how this is sourced."],
+
+
         "conflicting": conflicting or ["No contradictions detected in the collected sources."],
-        "missing": [f"❓ {item}" for item in missing_details(context)] or
-                   ["❓ Nothing obvious missing from the collected material."],
+        "missing": missing or ["❓ Nothing obvious missing from the collected material."],
+
         "context": [build_why_it_matters(context)],
         "potential_mistakes": mistakes,
     }
@@ -256,10 +344,12 @@ def build_key_facts(context: StoryContext) -> List[str]:
     if context.events:
         facts.append("Event: " + ", ".join(context.events[:2]))
     facts.append(f"Category: {category_label(context.story.get('category'))}")
+    counts = source_counts(context.story)
     facts.append(
-        f"Sources: {len(context.articles)} article(s), "
-        f"{context.story.get('independent_source_count') or 0} independent"
+        f"News sources: {counts['total']} ({counts['independent']} independent) across "
+        f"{len(context.articles)} article(s)"
     )
+    facts.append(f"Social posts (signals, not sources): {counts['social']}")
     if context.official_sources:
         facts.append("Official material from: " + ", ".join(
             sorted({source.name for source in context.official_sources})[:2]))
@@ -271,50 +361,86 @@ def build_key_facts(context: StoryContext) -> List[str]:
 
 
 def build_hooks(context: StoryContext) -> List[str]:
-    """Openers that grab attention without overstating what is known."""
+    """Openers that grab attention without overstating what is known.
+
+    Every hook that would name a subject has a variant for the case where no
+    fighter or event was detected. None of them fills the gap with a word -
+    the claim itself is always available and is always more useful.
+    """
     subject = subject_of(context)
     claim = spoken_claim(context.headline)
     short_claim = truncate(claim, 90)
     status = context.status
-    independent = context.story.get("independent_source_count") or 0
+    independent = source_counts(context.story)["independent"]
     hooks: List[str] = []
 
     if status == StoryStatus.CONFIRMED.value:
-        hooks += [
-            f"It's official: {short_claim}.",
-            f"The UFC just made it official - {subject}.",
-            f"This one is confirmed, and it changes things for {subject}.",
-        ]
+        hooks.append(f"It's official: {short_claim}.")
+        if subject:
+            hooks += [
+                f"The UFC just made it official - {subject}.",
+                f"This one is confirmed, and it changes things for {subject}.",
+            ]
+        else:
+            hooks += [
+                "The UFC just made this one official.",
+                "This one is confirmed, and here's what it changes.",
+            ]
     elif status == StoryStatus.REPORTED.value:
-        hooks += [
-            f"{independent} outlets are reporting this, and the UFC has not confirmed it yet.",
-            f"Here's what's being reported about {subject} - and what still isn't official.",
-            f"Big if true: {short_claim}. Here's who is actually reporting it.",
-        ]
+        hooks.append(
+            f"{independent} independent outlet{'s are' if independent != 1 else ' is'} "
+            "reporting this, and the UFC has not confirmed it yet.")
+        hooks.append(
+            f"Here's what's being reported about {subject} - and what still isn't official."
+            if subject else
+            "Here's what's being reported - and what still isn't official.")
+        hooks.append(f"Big if true: {short_claim}. Here's who is actually reporting it.")
     elif status == StoryStatus.DEVELOPING.value:
-        hooks += [
-            f"This one is moving right now: {subject}.",
-            f"The story on {subject} changed again. Here's where it stands.",
-        ]
+        if subject:
+            hooks += [
+                f"This one is moving right now: {subject}.",
+                f"The story on {subject} changed again. Here's where it stands.",
+            ]
+        else:
+            hooks += [
+                f"This one is moving right now: {short_claim}.",
+                "This one changed again overnight. Here's where it stands.",
+            ]
         if context.conflict_notes:
             hooks.append("Sources are not agreeing on this one yet - here's both sides.")
         else:
-            hooks.append(f"New details keep landing on {subject}. Here's what's solid so far.")
+            hooks.append(
+                f"New details keep landing on {subject}. Here's what's solid so far."
+                if subject else
+                "New details keep landing on this. Here's what's solid so far.")
     elif status == StoryStatus.FIGHTER_CLAIM.value:
-        hooks += [
-            f"{subject} just said it themselves - but nobody else has confirmed it.",
-            f"Straight from {subject}: here's the claim, and here's what's missing.",
-        ]
+        if subject:
+            hooks += [
+                f"{subject} just said it themselves - but nobody else has confirmed it.",
+                f"Straight from {subject}: here's the claim, and here's what's missing.",
+            ]
+        else:
+            hooks += [
+                "This came straight from the fighter - but nobody else has confirmed it.",
+                f"Here's the claim: {short_claim}. And here's what's missing from it.",
+            ]
     elif status == StoryStatus.RUMOR.value:
-        hooks += [
-            f"There's a rumour going round about {subject}. Let's check what actually backs it up.",
-            f"Before you repeat this {subject} rumour - look at where it came from.",
-        ]
+        if subject:
+            hooks += [
+                f"There's a rumour going round about {subject}. Let's check what actually backs it up.",
+                f"Before you repeat this {subject} rumour - look at where it came from.",
+            ]
+        else:
+            hooks += [
+                f"There's a rumour going round: {short_claim}. Let's check what backs it up.",
+                "Before you repeat this one - look at where it actually came from.",
+            ]
     else:
-        hooks += [
-            f"Something is going on with {subject}, and the sourcing is thin so far.",
-            f"Keep an eye on this one: {short_claim}.",
-        ]
+        hooks.append(
+            f"Something is going on with {subject}, and the sourcing is thin so far."
+            if subject else
+            "Something is going on here, and the sourcing is thin so far.")
+        hooks.append(f"Keep an eye on this one: {short_claim}.")
     if context.conflict_notes:
         hooks.append("One source says yes, another says no - here's the actual situation.")
     return hooks[:5]
@@ -324,8 +450,9 @@ def build_story_angle(context: StoryContext) -> str:
     status = context.status
     subject = subject_of(context)
     if status == StoryStatus.CONFIRMED.value:
+        changes_for = f"for {subject} and the division" if subject else "for the division"
         return (
-            f"Lead with the confirmation, then explain what it changes for {subject} and the division. "
+            f"Lead with the confirmation, then explain what it changes {changes_for}. "
             "Your edge is being fast AND correct: say plainly that it is official and who announced it."
         )
     if status == StoryStatus.REPORTED.value:
@@ -339,8 +466,9 @@ def build_story_angle(context: StoryContext) -> str:
             "disagree, and end on what to watch for next rather than a conclusion."
         )
     if status == StoryStatus.FIGHTER_CLAIM.value:
+        who = subject or "the person who said it"
         return (
-            f"Frame it as {subject} saying it, not as news. The interesting part is the gap between "
+            f"Frame it as {who} saying it, not as news. The interesting part is the gap between "
             "the claim and what anyone else has confirmed."
         )
     if status == StoryStatus.RUMOR.value:
@@ -348,8 +476,9 @@ def build_story_angle(context: StoryContext) -> str:
             "Make the sourcing the story. Show where the rumour started, who is repeating it, and "
             "why repetition is not confirmation - that is more useful than the rumour itself."
         )
+    signal = f"an early signal on {subject}" if subject else "an early signal"
     return (
-        f"Treat it as an early signal on {subject}: say what has been collected, what is missing, "
+        f"Treat it as {signal}: say what has been collected, what is missing, "
         "and tell people you will update when more sources land."
     )
 
@@ -363,20 +492,25 @@ def build_questions(context: StoryContext) -> List[str]:
     ]
     category = context.story.get("category")
     if category == Category.FIGHT_ANNOUNCEMENT.value:
-        questions += [f"When and where is it - which card?", "Is it a title fight?",
+        questions += ["When and where is it - which card?", "Is it a title fight?",
                       f"What does this mean for the rest of {event}?"]
     elif category == Category.INJURY.value:
-        questions += [f"Is {subject} out of their fight?", "How long is the layoff?",
-                      "Who replaces them?"]
+        questions += [f"Is {subject} out of their fight?" if subject
+                      else "Is anyone out of a booked fight?",
+                      "How long is the layoff?", "Who replaces them?"]
     elif category in (Category.CANCELLATION.value, Category.REPLACEMENT.value):
-        questions += [f"Why was it changed?", f"Is {event} still going ahead?",
+        questions += ["Why was it changed?", f"Is {event} still going ahead?",
                       "Does the new matchup still count for the same stakes?"]
     elif category == Category.RANKING.value:
         questions += ["Who moved up and who dropped?", "Does this change who fights for the title?"]
     elif category == Category.RESULT.value:
-        questions += [f"What's next for {subject}?", "Did anything change in the rankings?"]
+        questions += [f"What's next for {subject}?" if subject else "What happens next?",
+                      "Did anything change in the rankings?"]
     else:
-        questions += [f"What does this change for {subject}?", "When will we know more?"]
+        questions += [f"What does this change for {subject}?" if subject
+                      else "What does this actually change?",
+                      "When will we know more?"]
+
     if context.conflict_notes:
         questions.append("Why are two sources saying different things?")
     questions.append("Where can I read the original reporting?")
@@ -392,7 +526,7 @@ def build_script(context: StoryContext, seconds: int = 30) -> str:
     status = context.status
     subject = subject_of(context)
     claim = spoken_claim(context.headline)
-    independent = context.story.get("independent_source_count") or 0
+    independent = source_counts(context.story)["independent"]
     hook = build_hooks(context)[0]
     official_names = sorted({source.name for source in context.official_sources})
     credible_names = sorted({source.name for source in context.credible_sources})[:3]
@@ -417,20 +551,22 @@ def build_script(context: StoryContext, seconds: int = 30) -> str:
     if context.conflict_notes:
         required.append("And the sources don't agree yet - one side is disputing it.")
 
-    closing = (
-        f"So that's locked in for {subject}. What do you think happens next?"
-        if status == StoryStatus.CONFIRMED.value
-        else "I'll update the second it's confirmed - what do you think, real or not?"
-    )
+    if status == StoryStatus.CONFIRMED.value:
+        closing = (f"So that's locked in for {subject}. What do you think happens next?"
+                   if subject else "So that one's locked in. What do you think happens next?")
+    else:
+        closing = "I'll update the second it's confirmed - what do you think, real or not?"
+
 
     optional: List[str] = []
     gaps = missing_details(context)
     if seconds >= 60:
         if credible_names and status != StoryStatus.CONFIRMED.value:
             optional.append(
-                f"Right now it's {independent} independent source"
+                f"Right now it's {independent} independent news source"
                 f"{'s' if independent != 1 else ''} - aggregators repeating it don't count."
             )
+
         optional.extend(_spoken_gap(gap, position) for position, gap in enumerate(gaps[:2]))
         timeline_line = _timeline_line(context)
         if timeline_line:
@@ -449,6 +585,7 @@ def build_script(context: StoryContext, seconds: int = 30) -> str:
         lines.append(candidate)
     lines.append(closing)
     return collapse_whitespace(" ".join(line.strip() for line in lines if line and line.strip()))
+
 
 
 def _word_count(lines: List[str]) -> int:

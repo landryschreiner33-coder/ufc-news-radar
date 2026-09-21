@@ -3,7 +3,16 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from database.db import execute, json_dump, json_load, query_all, query_one, query_value, transaction
+from database.db import (
+    execute,
+    insert_with_id,
+    json_dump,
+    json_load,
+    query_all,
+    query_one,
+    query_value,
+    transaction,
+)
 from utils.textutil import canonical_url, domain_of, normalize_title, sha1, url_hash
 from utils.timeutil import hours_ago_iso, utcnow_iso
 
@@ -45,8 +54,10 @@ def insert_article(article: Dict[str, Any]) -> Optional[int]:
     title = article["title"]
     normalized = normalize_title(title)
     with transaction() as connection:
-        cursor = connection.execute(
+        return insert_with_id(
+            connection,
             "INSERT INTO articles (source_id, source_key, source_name, external_id, url, canonical_url, "
+
             "url_hash, domain, title, normalized_title, title_hash, author, published_at, collected_at, "
             "excerpt, content_snippet, content_chars, image_url, category, fighters, events, keywords, "
             "language, source_type, reliability_weight, independence_group, attribution_outlets, "
@@ -73,7 +84,6 @@ def insert_article(article: Dict[str, Any]) -> Optional[int]:
                 article.get("event_occurred_at"), article.get("updated_at_source"), now,
             ),
         )
-        return cursor.lastrowid
 
 
 def update_article(article_id: int, **fields: Any) -> None:

@@ -20,8 +20,10 @@ from database import repo_settings as settings_repo
 from database import repo_social as social_repo
 from database import repo_stories as stories_repo
 from models.types import Category, EventStatus, event_status_style
-from processors.event_lifecycle import format_countdown
+from processors import bout_status as bout_model
+from processors.event_lifecycle import format_countdown, status_explanation
 from ui import nav
+
 from ui.cards import card_grid, esc
 from ui.components import metric_row, page_header, section_header
 from ui.images import image_for_event
@@ -175,11 +177,13 @@ def render_detail(event_id: int) -> None:
     card = entities_repo.fight_card(event_id)
     changes = entities_repo.card_changes(event_id, limit=40)
     stories = stories_repo.stories_for_event(event_id, event["name"], limit=60)
-    official = [bout for bout in card if bout.get("official_status") == "official"]
+    official = [bout for bout in card if bout.get("official_status") == bout_model.OFFICIAL]
+    reported = [bout for bout in card if bout.get("official_status") == bout_model.REPORTED]
 
     metric_row([
         ("Status", style.label),
-        ("Official bouts", len(official)),
+        ("On official card", len(official)),
+        ("Reported only", len(reported)),
         ("Bouts tracked", len(card)),
         ("Card changes", len(changes)),
         ("Stories", len(stories)),
@@ -196,27 +200,63 @@ def render_detail(event_id: int) -> None:
     _render_card(card)
     _render_changes(changes)
 
-    section_header("INJURIES, REPLACEMENTS & CANCELLATIONS")
-    card_grid([story for story in stories if story.get("category") in (
-        Category.INJURY.value, Category.REPLACEMENT.value, Category.CANCELLATION.value)],
-        "None collected for this event.", limit=6, key=f"evchg_{event_id}")
-
-    section_header("RUMORS & DEVELOPING")
-    card_grid([story for story in stories
-               if story.get("is_developing") or story.get("status") in ("RUMOR", "UNVERIFIED")],
-              "None collected for this event.", limit=6, key=f"evrum_{event_id}")
-
-    section_header("EVENT NEWS", len(stories))
-    card_grid(stories, "No stories mention this event yet.", limit=8, key=f"evnews_{event_id}")
+    _render_event_stories(event_id, stories)
 
     _render_social(event["name"])
 
 
+def _render_event_stories(event_id: int, stories: List[Dict[str, Any]]) -> None:
+    """The event's stories, each shown once.
+
+    A story can legitimately carry several attributes - a cancellation that is
+    also still developing, for instance - but showing the same card twice on
+    one page makes it look like two separate developments. Sections therefore
+    consume from a shared pool in priority order, exactly as the dashboard
+    does, instead of each filtering the whole list independently.
+    """
+    remaining = list(stories)
+
+    def take(predicate) -> List[Dict[str, Any]]:
+        taken = [story for story in remaining if predicate(story)]
+        ids = {story["id"] for story in taken}
+        remaining[:] = [story for story in remaining if story["id"] not in ids]
+        return taken
+
+    changes = take(lambda story: story.get("category") in (
+        Category.INJURY.value, Category.REPLACEMENT.value, Category.CANCELLATION.value))
+    rumors = take(lambda story: story.get("is_developing")
+                  or story.get("status") in ("RUMOR", "UNVERIFIED"))
+
+    section_header("INJURIES, REPLACEMENTS & CANCELLATIONS", len(changes))
+    card_grid(changes, "None collected for this event.", limit=6, key=f"evchg_{event_id}")
+
+    section_header("RUMORS & DEVELOPING", len(rumors),
+                   note="Card changes above are not repeated here.")
+    card_grid(rumors, "None collected for this event.", limit=6, key=f"evrum_{event_id}")
+
+    section_header("OTHER EVENT NEWS", len(remaining))
+    card_grid(remaining,
+              "Every collected story about this event is shown in the sections above."
+              if stories else "No stories mention this event yet.",
+              limit=8, key=f"evnews_{event_id}")
+
+
 def _render_status_panel(event: Dict[str, Any], style: Any) -> None:
-    """The status, why it says that, and anything that disagrees."""
-    reasons = event.get("status_reasons") or []
+    """The status, why it says that, and anything that disagrees.
+
+    The explanation is generated from this event's own fields
+    (``processors.event_lifecycle.status_explanation``) rather than from a
+    fixed sentence per status, so it can never claim a start time the app
+    does not have while the reasons underneath say none was collected.
+    """
+    explanation = status_explanation(event)
     conflicts = event.get("status_conflicts") or []
+    # The stored reasons appear only where they add something the one-line
+    # explanation does not already say.
+    reasons = [reason for reason in (event.get("status_reasons") or [])
+               if normalize_text(reason) != normalize_text(explanation)]
     body = "".join(f"<li>{esc(reason)}</li>" for reason in reasons)
+
     conflict_html = ""
     if conflicts:
         items = "".join(f"<li>{esc(note)}</li>" for note in conflicts)
@@ -230,17 +270,23 @@ def _render_status_panel(event: Dict[str, Any], style: Any) -> None:
         f'<div class="panel"><h4>EVENT STATUS</h4>'
         f'<div class="kv"><b style="color:{style.color}">{style.emoji} {style.label}</b> · '
         f'from <b>{esc(source)}</b> · confidence <b>{esc(confidence)}</b></div>'
-        f'<div class="muted">{esc(style.meaning)}</div>'
+        f'<div class="kv">{esc(explanation)}</div>'
         + (f'<ul class="muted" style="margin:8px 0 0 16px">{body}</ul>' if body else "")
         + conflict_html + '</div>',
         unsafe_allow_html=True)
 
 
 def _render_card(card: List[Dict[str, Any]]) -> None:
-    """Official bouts first, then reported, then rumoured and cancelled."""
+    """Official bouts first, then reported, then rumoured and cancelled.
+
+    Buckets are driven by ``official_status`` and the provenance line is built
+    from the same model, so the heading and the detail under it can never
+    disagree - see ``processors/bout_status.py``.
+    """
     section_header("FIGHT CARD", len(card),
-                   note="Official = listed by UFC. Reported = from journalism only. "
-                        "A reported bout is not an official bout.")
+                   note="OFFICIAL CARD DATA = read from UFC's own event page. "
+                        "OFFICIAL SOURCE REPORTING = an article UFC published; that is still "
+                        "reporting, not a card entry. A reported bout is not an official bout.")
     if not card:
         st.markdown(
             '<div class="muted">No bouts collected for this event yet. Bouts appear when the app '
@@ -249,14 +295,15 @@ def _render_card(card: List[Dict[str, Any]]) -> None:
         return
 
     buckets = [
-        ("✅ OFFICIAL FIGHT CARD", "Listed on UFC's own event page.",
-         lambda bout: bout.get("official_status") == "official"
+        ("✅ OFFICIAL FIGHT CARD", "Read from UFC's own event page.",
+         lambda bout: bout.get("official_status") == bout_model.OFFICIAL
          and bout.get("status") != "cancelled"),
         ("\U0001F7E1 REPORTED / DEVELOPING", "Reported by journalists; not on the official card yet.",
-         lambda bout: bout.get("official_status") not in ("official", "rumored")
+         lambda bout: bout.get("official_status") == bout_model.REPORTED
          and bout.get("status") != "cancelled"),
         ("\U0001F534 UNCONFIRMED / RUMORED", "Rumoured only. Do not present these as booked.",
-         lambda bout: bout.get("official_status") == "rumored" and bout.get("status") != "cancelled"),
+         lambda bout: bout.get("official_status") == bout_model.RUMORED
+         and bout.get("status") != "cancelled"),
         ("\U0001F6AB CANCELLED", "Removed from the card.",
          lambda bout: bout.get("status") == "cancelled"),
     ]
@@ -281,9 +328,8 @@ def _render_card(card: List[Dict[str, Any]]) -> None:
                     f'<div class="kv"><b>{esc(bout["fighter_a"])} vs. {esc(bout["fighter_b"])}</b>'
                     f'{flags}</div>'
                     f'<div class="muted">{esc(bout.get("weight_class") or "weight class not collected")} · '
-                    f'status: {esc(bout.get("status"))} · confidence: {esc(bout.get("confidence"))} · '
-                    f'source: {esc(bout.get("source_name") or "n/a")} · '
-                    f'first seen {esc(humanize_age(bout.get("first_seen_at")))}</div></div>',
+                    f'{esc(bout_model.describe_bout(bout))} · '
+                    f'First seen {esc(humanize_age(bout.get("first_seen_at")))}.</div></div>',
                     unsafe_allow_html=True)
 
 

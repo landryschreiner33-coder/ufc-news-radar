@@ -16,9 +16,14 @@ from utils.timeutil import format_display
 
 def render() -> None:
     page_header("SEARCH", "Everything the app has collected.")
-    term = st.text_input("Search", value=st.query_params.get("q", ""), key="global_search",
+    # The term arrives either in the URL or in session state - the sidebar box
+    # switches page, and st.switch_page does not carry the query string.
+    # Recording it back keeps the URL shareable and the box filled.
+    term = st.text_input("Search", value=nav.param("q", "") or "", key="global_search",
                          placeholder="fighter, event, outlet, keyword, @account...")
+    nav.set_selection("q", term.strip())
     if not term.strip():
+
         st.markdown('<div class="muted">Type something to search.</div>', unsafe_allow_html=True)
         return
 

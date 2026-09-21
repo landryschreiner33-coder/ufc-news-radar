@@ -18,6 +18,7 @@ from models.types import (
     FIRST_PERSON_TYPES,
     SourceType,
     normalize_source_type,
+    source_counts,
     status_badge,
 )
 from utils.config import get_config
@@ -70,11 +71,51 @@ class StoryContext:
 
     @property
     def fighters(self) -> List[str]:
-        return list(self.story.get("fighters") or [])
+        """Fighters this story is about.
+
+        The stored list first, then the matchup in the headline. A headline
+        that plainly names two fighters must never sit above "no fighter
+        detected in the collected text" - the app was contradicting itself on
+        one screen whenever the fighters were not yet in the registry.
+        """
+        names = [name for name in (self.story.get("fighters") or []) if name]
+        if names:
+            return names
+        from processors.entities import find_fighters
+
+        try:
+            return find_fighters(self.headline)
+        except Exception:  # entity lookup must never break a research page
+            return []
 
     @property
     def events(self) -> List[str]:
-        return list(self.story.get("events") or [])
+        """Events this story is about, including the one it is linked to.
+
+        ``event_id`` is the canonical relationship established by the
+        pipeline. If the story is attached to an event, that event *is* named
+        in this story's material, whatever the text matching found.
+        """
+        names = [name for name in (self.story.get("events") or []) if name]
+        if names:
+            return names
+        event_id = self.story.get("event_id")
+        if event_id:
+            try:
+                from database import repo_entities as entities_repo
+
+                event = entities_repo.get_event(int(event_id))
+                if event and event.get("name"):
+                    return [str(event["name"])]
+            except Exception:
+                pass
+        from processors.entities import find_events
+
+        try:
+            return find_events(self.headline)
+        except Exception:
+            return []
+
 
     @property
     def official_sources(self) -> List[SourceRef]:
@@ -90,6 +131,11 @@ class StoryContext:
     @property
     def first_person_sources(self) -> List[SourceRef]:
         return [source for source in self.sources if source.source_type in FIRST_PERSON_TYPES]
+
+    @property
+    def counts(self) -> Dict[str, int]:
+        """News sources / independent news sources / social posts."""
+        return source_counts(self.story)
 
     @property
     def conflict_notes(self) -> List[str]:
@@ -143,7 +189,9 @@ class StoryContext:
             f"CATEGORY: {story.get('category')}",
             f"FIGHTERS MENTIONED: {', '.join(self.fighters) or 'none detected'}",
             f"EVENT MENTIONED: {', '.join(self.events) or 'none detected'}",
-            f"INDEPENDENT CREDIBLE SOURCES: {story.get('independent_source_count', 0)}",
+            f"NEWS SOURCES: {self.counts['total']} "
+            f"({self.counts['independent']} independent)",
+            f"SOCIAL POSTS (signals, never news sources): {self.counts['social']}",
             f"OFFICIALLY CONFIRMED: {'yes' if story.get('official_confirmed') else 'no'}",
             f"SOURCE-SUPPORT SCORE: {story.get('support_score')} ({story.get('support_label')})",
             f"FIRST SEEN: {format_display(story.get('first_seen_at'))}",

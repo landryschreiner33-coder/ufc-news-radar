@@ -1,15 +1,23 @@
 """The news card grid.
 
-Built as one HTML block using CSS grid rather than ``st.columns``, for two
-reasons:
+The grid is ``st.container(horizontal=True, wrap=True)`` with a real button
+per card, not a block of HTML anchors: Streamlit's router rewrites in-app
+anchors and drops their query string, so a card built as ``<a href="?story=1">``
+silently loses the id. Native containers wrap exactly like a CSS grid and keep
+the buttons working.
 
-* ``st.columns`` takes a fixed count, so a four-column feed stays four columns
-  on a phone. A grid with ``minmax()`` reflows 4 -> 3 -> 2 -> 1 by itself.
-* One block of markup per section renders in a single pass instead of one
-  Streamlit element per card.
+One rule governs ``card_html`` and is easy to break by accident:
 
-Each card is an ``<a>`` pointing at ``?story=<id>``, which the router picks up,
-so cards stay clickable, keyboard-focusable and bookmarkable.
+    **the markup must contain no blank lines and no indented lines.**
+
+``st.markdown`` parses CommonMark before it renders HTML. A blank line inside
+an HTML block *ends* that block, and any following line indented four spaces
+or more then becomes an indented code block - which Streamlit escapes and
+shows as literal ``<div class="foot">`` text on the card. An earlier version
+of this file interpolated an empty string on its own line for every status
+except RUMOR, which is exactly why non-rumour cards rendered their footer as
+a grey code block. Markup is therefore assembled as a list of fragments and
+joined with no separator: there is no whitespace for CommonMark to trip on.
 """
 from __future__ import annotations
 
@@ -18,7 +26,7 @@ from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
-from models.types import category_label, status_style
+from models.types import category_label, source_count_line, source_counts, status_style
 from ui import nav
 from ui.images import image_for_story
 from utils.textutil import truncate
@@ -34,7 +42,16 @@ _STATUS_CLASS = {
 
 
 def esc(value: Any) -> str:
-    return html.escape(str(value if value is not None else ""), quote=True)
+    """HTML-escape a value, and flatten it onto one line.
+
+    The newline matters as much as the escaping: a feed title can contain one,
+    and a newline inside the markup would end the HTML block and turn the rest
+    of the card into escaped text (see the module docstring). Collapsing it
+    here means no caller has to remember.
+    """
+    text = html.escape(str(value if value is not None else ""), quote=True)
+    return " ".join(text.split()) if ("\n" in text or "\r" in text) else text
+
 
 
 def badge_html(text: str, color: str, title: str = "") -> str:
@@ -79,8 +96,6 @@ def card_html(story: Dict[str, Any], event: Optional[Dict[str, Any]] = None) -> 
     placeholder_note = ('<div class="ph-note">GENERIC GRAPHIC - NO SOURCE IMAGE</div>'
                         if image["is_placeholder"] else "")
 
-    sources = int(story.get("source_count") or 0)
-    independent = int(story.get("independent_source_count") or 0)
     entities = [name for name in (story.get("fighters") or [])[:2]]
     entities += [name for name in (story.get("events") or [])[:1]]
     entity_line = " · ".join(esc(name) for name in entities) if entities else ""
@@ -96,20 +111,30 @@ def card_html(story: Dict[str, Any], event: Optional[Dict[str, Any]] = None) -> 
             f'<b>UFC confirmation:</b> {official}</div>'
         )
 
-    return f"""<div class="{' '.join(classes)}">
-  <div class="thumb"><img src="{esc(image['url'])}" alt="{esc(image['caption'])}" loading="lazy">{placeholder_note}</div>
-  <div class="body">
-    <div class="badges">{status_badge(status)}{_flag_badges(story)}</div>
-    <h3>{esc(story.get('headline') or 'Untitled')}</h3>
-    <p class="sum">{esc(truncate(story.get('summary') or '', 180))}</p>
-    {claim_block}
-    <div class="foot">
-      <span>{sources} source{'s' if sources != 1 else ''} · {independent} independent<br>
-            {esc(category_label(story.get('category')))} · {esc(humanize_age(story.get('last_updated_at')))}</span>
-    </div>
-    {f'<div class="muted" style="font-size:0.7rem">{entity_line}</div>' if entity_line else ''}
-  </div>
-</div>"""
+    # Assembled as fragments and joined with "" - see the module docstring.
+    # Nothing here may introduce a newline.
+    body = [
+        f'<div class="badges">{status_badge(status)}{_flag_badges(story)}</div>',
+        f'<h3>{esc(story.get("headline") or "Untitled")}</h3>',
+        f'<p class="sum">{esc(truncate(story.get("summary") or "", 180))}</p>',
+        claim_block,
+        '<div class="foot"><span>'
+        f'{esc(source_count_line(story))}<br>'
+        f'{esc(category_label(story.get("category")))} · '
+        f'{esc(humanize_age(story.get("last_updated_at")))}'
+        '</span></div>',
+    ]
+    if entity_line:
+        body.append(f'<div class="muted" style="font-size:0.7rem">{entity_line}</div>')
+    markup = (
+        f'<div class="{" ".join(classes)}">'
+        f'<div class="thumb"><img src="{esc(image["url"])}" '
+        f'alt="{esc(image["caption"])}" loading="lazy">{placeholder_note}</div>'
+        f'<div class="body">{"".join(body)}</div>'
+        '</div>'
+    )
+    assert "\n" not in markup, "card markup must stay on one line (see module docstring)"
+    return markup
 
 
 def related_reports(story: Dict[str, Any], key: str) -> None:
@@ -125,9 +150,10 @@ def related_reports(story: Dict[str, Any], key: str) -> None:
     total = int(story.get("article_count") or 0)
     if total < 2:
         return
-    independent = int(story.get("independent_source_count") or 0)
-    label = (f"View {total - 1} related report(s) · {independent} independent "
-             f"of {total} total")
+    counts = source_counts(story)
+    label = (f"View {total - 1} related report(s) · {counts['independent']} independent "
+             f"news source(s) behind {total} article(s)")
+
     with st.expander(label):
         articles = articles_repo.articles_for_story(story_id)
         primary_id = story.get("primary_article_id")

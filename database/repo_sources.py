@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from database.db import execute, json_dump, json_load, query_all, query_one, rows_to_dicts
+from database.db import execute, json_dump, json_load, query_all, query_one
 from utils.timeutil import utcnow_iso
 
 
@@ -147,15 +147,100 @@ def record_failure(source_id: int, error: str, error_kind: str = "unknown") -> N
     )
 
 
+# --------------------------------------------------------- health states --
+# Exactly one state per source, decided in this order. Because the tests are
+# mutually exclusive and exhaustive, the counts on the Source health page
+# always add up to the number of sources - the previous build showed
+# "SOURCES 16, HEALTHY 9, FAILING 5" and left the other two unaccounted for.
+HEALTHY = "HEALTHY"
+PARTIAL = "PARTIAL"
+STALE = "STALE"
+ERROR = "ERROR"
+DISABLED = "DISABLED"
+NOT_CONFIGURED = "NOT_CONFIGURED"
+NOT_RUN = "NOT_RUN"
+
+#: Display order, which is also the order the tests are applied in.
+HEALTH_STATES = [HEALTHY, PARTIAL, STALE, ERROR, NOT_RUN, NOT_CONFIGURED, DISABLED]
+
+HEALTH_STATE_STYLES: Dict[str, Dict[str, str]] = {
+    HEALTHY: {"emoji": "✅", "label": "Healthy", "color": "#19c37d",
+              "meaning": "Last fetch succeeded and returned items."},
+    PARTIAL: {"emoji": "🟡", "label": "Partial", "color": "#e8c547",
+              "meaning": "The fetch works but nothing usable has been collected from it."},
+    STALE: {"emoji": "🟠", "label": "Stale", "color": "#ff9130",
+            "meaning": "No successful fetch recently, even though the last attempt did not error."},
+    ERROR: {"emoji": "❌", "label": "Error", "color": "#ef4444",
+            "meaning": "The last attempt failed. The reason is recorded below."},
+    NOT_RUN: {"emoji": "⚪", "label": "Not run", "color": "#9aa4b2",
+              "meaning": "Enabled and configured, but never attempted yet."},
+    NOT_CONFIGURED: {"emoji": "⚙", "label": "Not configured", "color": "#9aa4b2",
+                     "meaning": "Nothing to fetch: no feed URL is set for this source."},
+    DISABLED: {"emoji": "⏸", "label": "Disabled", "color": "#6b7280",
+               "meaning": "Switched off. It is not attempted at all."},
+}
+
+#: A source that has not succeeded within this window is stale.
+STALE_AFTER_HOURS = 48
+
+
+def health_state(source: Dict[str, Any], stale_after_hours: int = STALE_AFTER_HOURS) -> str:
+    """The one state this source is in. See HEALTH_STATES for the ordering."""
+    from utils.timeutil import age_hours
+
+    if not source.get("enabled"):
+        return DISABLED
+    has_target = bool(source.get("feed_url") or source.get("resolved_feed_url")
+                      or source.get("fallback_urls"))
+    if not has_target:
+        return NOT_CONFIGURED
+    if str(source.get("status") or "") == "error":
+        return ERROR
+    if not source.get("last_attempt_at"):
+        return NOT_RUN
+    if not source.get("last_success_at"):
+        # Attempted, did not error, never succeeded - an odd state, but a real
+        # one, and it is not health.
+        return STALE
+    age = age_hours(source.get("last_success_at"))
+    if age is not None and age > stale_after_hours:
+        return STALE
+    if not int(source.get("article_count") or 0):
+        return PARTIAL
+    return HEALTHY
+
+
 def source_health() -> List[Dict[str, Any]]:
-    """Rows for the Source Health panel."""
+    """Rows for the Source Health panel, each carrying its single state."""
     rows = query_all(
-        "SELECT id, key, name, adapter, enabled, status, feed_url, resolved_feed_url, homepage, "
-        "source_type, reliability_weight, last_success_at, last_attempt_at, last_error, last_error_kind, "
-        "last_error_at, consecutive_failures, article_count, last_article_at "
+        "SELECT id, key, name, adapter, enabled, status, feed_url, fallback_urls, "
+        "resolved_feed_url, homepage, source_type, reliability_weight, last_success_at, "
+        "last_attempt_at, last_error, last_error_kind, last_error_at, consecutive_failures, "
+        "article_count, last_article_at "
         "FROM sources ORDER BY enabled DESC, priority, name"
     )
-    return rows_to_dicts(rows)
+    sources = [_hydrate(row) for row in rows]
+    for source in sources:
+        source["health_state"] = health_state(source)  # type: ignore[index]
+    return sources  # type: ignore[return-value]
+
+
+def health_summary() -> Dict[str, Any]:
+    """Counts that reconcile: every source is in exactly one bucket."""
+    sources = source_health()
+    counts = {state: 0 for state in HEALTH_STATES}
+    for source in sources:
+        counts[source["health_state"]] += 1
+    total = len(sources)
+    assert sum(counts.values()) == total, "source health states must be exhaustive"
+    return {
+        "total": total,
+        "counts": counts,
+        "working": counts[HEALTHY] + counts[PARTIAL],
+        "failing": counts[ERROR] + counts[STALE],
+        "inactive": counts[NOT_RUN] + counts[NOT_CONFIGURED] + counts[DISABLED],
+        "sources": sources,
+    }
 
 
 def delete_source(source_id: int) -> None:

@@ -23,7 +23,7 @@ from processors import developing as developing_mod
 from processors import fight_cards, relevance, support, trending, verification
 from processors.clustering import StoryMatcher, assign_article
 from processors.enrich import enrich_article, enrich_social_post
-from processors.entities import find_events, find_fighters, get_fighter_index, reset_fighter_index
+from processors.entities import find_events, find_fighters, get_fighter_index, reset_indexes
 from processors.similarity import set_similarity
 from utils.logging_setup import get_logger
 from utils.textutil import jaccard, normalize_text, token_set
@@ -159,10 +159,12 @@ def recompute_story(story_id: int, watchlist_terms: Optional[List[str]] = None) 
     fields.update(trend.as_story_fields())
     fields.update(score.as_story_fields())
     fields["article_count"] = len(articles)
-    fields["source_count"] = len({
-        article.get("independence_group") or article.get("source_name") for article in articles
-    })
+    # source_count / independent_source_count / social_post_count all come from
+    # the verification pass so they are always computed from the same pool.
+    # Recomputing any of them here is what previously produced a story with
+    # more "independent" sources than it had sources at all.
     fields["social_post_count"] = len(posts)
+
     fields["category"] = _dominant_category(story, articles)
     settled = verdict.official_confirmed and not verdict.has_conflict
     fields["is_developing"] = False if settled else (
@@ -335,7 +337,7 @@ def detect_card_changes(story_ids: Optional[List[int]] = None, limit: int = 120)
 # ------------------------------------------------------------------- run ----
 def process_all(items: Optional[List[Dict[str, Any]]] = None) -> PipelineStats:
     """Full pass: ingest (optional) -> cluster -> rescore -> link -> cards."""
-    reset_fighter_index()
+    reset_indexes()
     stats = PipelineStats()
     if items:
         stats.merge(ingest_articles(items))
@@ -354,5 +356,9 @@ def process_all(items: Optional[List[Dict[str, Any]]] = None) -> PipelineStats:
         stats.events_reconciled = reconcile_all_events().get("changed", 0)
     except Exception:  # pragma: no cover - a status pass must not lose a run
         logger.exception("Event reconciliation failed")
-    settings_repo.set_setting("last_collection_at", utcnow_iso(), "str")
+    # Reprocessing is not collecting. ``last_collection_at`` is written by
+    # collectors/runner.py, and only when a source actually returned, so a
+    # failed run can never make the dashboard claim fresh data.
+    settings_repo.set_setting("last_processed_at", utcnow_iso(), "str")
     return stats
+

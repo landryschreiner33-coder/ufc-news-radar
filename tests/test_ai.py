@@ -100,7 +100,10 @@ def test_key_facts_come_from_the_database(ingest, make_article):
     story_id = _story(ingest, make_article)
     facts = ai_service.key_facts(story_id)
     assert any("Status:" in fact for fact in facts)
-    assert any("Sources:" in fact for fact in facts)
+    # News sources and social posts are reported as two separate counts; they
+    # are never added together into one "Sources" number.
+    assert any("News sources:" in fact for fact in facts)
+    assert any("Social posts" in fact for fact in facts)
 
 
 def test_generation_is_cached(ingest, make_article):

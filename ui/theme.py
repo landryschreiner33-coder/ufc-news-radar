@@ -31,7 +31,15 @@ COLORS = {
 CSS = f"""
 <style>
   .stApp {{ background: {COLORS['bg']}; }}
-  .block-container {{ padding-top: 1.6rem; padding-bottom: 3rem; max-width: 1640px; }}
+  /* Streamlit's own toolbar floats over the top of the page, so the first
+     element needs clearance or its first line is clipped. */
+  .block-container {{ padding-top: 3.1rem; padding-bottom: 3rem; max-width: 1640px; }}
+
+  .brandline {{
+      font-size: 1.15rem; font-weight: 800; letter-spacing: 2px;
+      padding: 0 0 10px 2px; color: {COLORS['text']};
+  }}
+  .brandline span {{ color: {COLORS['accent_soft']}; }}
 
   .radar-header {{
       display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
@@ -239,6 +247,31 @@ CSS = f"""
   .ncard:focus-visible, a:focus-visible, .stButton button:focus-visible {{
       outline: 2px solid {COLORS['accent_soft']}; outline-offset: 2px;
   }}
+
+  /* ------------------------------------------------------------ phones --
+     Cards are laid out by st.container(width=N), which is a fixed pixel
+     width. Below roughly 430px that width plus the page gutters is wider
+     than the screen, so the feed scrolls sideways. Forcing the card
+     containers to full width inside the wrapping flex row fixes it without
+     touching the desktop layout. */
+  @media (max-width: 640px) {{
+      .block-container {{
+          padding-top: 3.1rem; padding-left: 16px; padding-right: 16px;
+      }}
+      [class*="st-key-cardgrid_"] > div,
+      [class*="st-key-evgrid_"] > div,
+      [class*="st-key-fighter_grid"] > div {{
+          width: 100% !important; min-width: 0 !important; flex: 1 1 100% !important;
+      }}
+      .radar-title {{ font-size: 1.5rem; letter-spacing: 1.2px; }}
+      .radar-title.story {{ font-size: 1.2rem; }}
+      .metric-row {{ gap: 7px; }}
+      .metric-box {{ min-width: 88px; padding: 7px 11px; }}
+      .statusbar {{ font-size: 0.72rem; }}
+  }}
+
+  /* Nothing may push the page wider than the viewport. */
+  html, body, .stApp {{ max-width: 100%; overflow-x: hidden; }}
 </style>
 """
 

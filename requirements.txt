@@ -11,4 +11,6 @@ scikit-learn==1.9.1        # TF-IDF + cosine similarity for story clustering
 pandas==3.0.6              # small tables in the UI
 python-dotenv==1.2.3       # load API keys from .env
 python-dateutil==2.9.0.post0  # tolerant date parsing for feeds
+psycopg2-binary==2.9.13    # PostgreSQL driver - only used when DATABASE_URL is set
 pytest==9.1.1              # test suite
+

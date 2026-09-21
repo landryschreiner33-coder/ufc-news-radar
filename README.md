@@ -270,7 +270,8 @@ need more than one of the three.
 | `X_MAX_TIMELINES_PER_RUN` | `5` | Protects your X quota |
 | `X_MAX_RESULTS_PER_QUERY` | `25` | Posts requested per query |
 | `X_QUERY_CACHE_MINUTES` | `30` | Do not repeat an identical query sooner |
-| `UFC_RADAR_DB` | `data/ufc_news_radar.db` | Where the database file lives |
+| `UFC_RADAR_DB` | `data/ufc_news_radar.db` | Where the SQLite file lives |
+| `DATABASE_URL` | empty | Use PostgreSQL instead of SQLite (see *Running it online*) |
 | `HTTP_TIMEOUT_SECONDS` | `20` | Per-request timeout |
 | `HTTP_USER_AGENT` | `UFCNewsRadar/1.0 ...` | Sent with every request |
 | `UFC_RADAR_DEBUG` | `0` | `1` for verbose logging |
@@ -402,23 +403,47 @@ python -m pytest -k rumor              :: tests matching a word
 The tests use their own temporary databases and never touch your real data or
 the network.
 
+### Testing against PostgreSQL
+
+The same suite runs against PostgreSQL - the same tests, the same assertions,
+the other backend. That is what makes `DATABASE_URL` a supported option rather
+than a hopeful label:
+
+```bash
+createdb ufc_radar_test
+UFC_RADAR_TEST_DATABASE_URL=postgresql://user:pass@localhost/ufc_radar_test \
+    python -m pytest
+```
+
+The run needs a database of its own: it drops and recreates the schema between
+tests. The upgrade-path tests are skipped there, because a fresh PostgreSQL
+database is created at the current schema version and there is no older one in
+the wild to upgrade.
+
 ---
 
 ## The database
 
-* A single SQLite file: `data\ufc_news_radar.db` (change with `UFC_RADAR_DB`).
+* **SQLite** by default: a single file, `data\ufc_news_radar.db` (change with
+  `UFC_RADAR_DB`). Zero setup.
+* **PostgreSQL** when `DATABASE_URL` is set - the option for permanent history
+  on a host whose filesystem is temporary. See *Running it online* above.
 * Created automatically on first run; schema upgrades apply on start.
 * Browse the row counts in **Settings → Database**.
-* To start completely fresh, close the app and delete the file - it is rebuilt
-  on the next start. You will lose collected history.
-* The schema is deliberately PostgreSQL-friendly (ISO-8601 UTC timestamps,
-  JSON text columns, no SQLite-only types) so it can be migrated later.
+* To start completely fresh on SQLite, close the app and delete the file - it
+  is rebuilt on the next start. You will lose collected history.
+* One SQL dialect is written throughout the code and translated for PostgreSQL
+  in `database/backends.py`, so there is never a second copy of a query for
+  the two to drift apart.
 
 ### Backups
 
-**Settings → Database → Backup & restore.** Download gives you one file
-containing everything collected. Restoring validates the file first, and keeps
-your current database alongside the restored one rather than destroying it.
+**Settings → Database → Backup & restore.** On SQLite, Download gives you one
+file containing everything collected; restoring validates the file first and
+keeps your current database alongside the restored one rather than destroying
+it. On PostgreSQL, backups are your provider's (managed snapshots or
+`pg_dump`) and the page says so rather than offering an export that would
+contain nothing.
 
 ### Checking your data
 
@@ -426,10 +451,18 @@ your current database alongside the restored one rather than destroying it.
 python scripts\validate_production_data.py
 ```
 
-Reports duplicate events or fighters, events marked completed before they
-start, predictions treated as results, stories with no sources, impossible or
-future-dated timestamps, ranking problems and official conflicts. Add
-`--check-urls` to test the stored article links too (needs internet, slower).
+Reports duplicate events, fighters or stories; events marked completed before
+they start and events left upcoming long after; predictions treated as
+results; stories with no sources; impossible or future-dated timestamps;
+ranking problems; official/reported contradictions on a bout; source counts
+that cannot be true (more independent sources than sources); articles with no
+classified intent; malformed links; legacy schema columns; and settings that
+nothing reads. Add `--check-urls` to test the stored article links too (needs
+internet, slower).
+
+Exit code 0 means clean or warnings only; 1 means errors were found, so it
+works in a scheduled job.
+
 
 ### Fixing data by hand
 
@@ -460,35 +493,68 @@ with the fewest surprises. If you do want it online:
 
 **Read this before you rely on it.** Streamlit Community Cloud gives an app a
 *temporary* filesystem: it is wiped on every redeploy and whenever the
-container restarts. The app works fine, but the news it collects will not build
-up over time. **Settings → Database → Storage** says so on screen when it
-detects this, rather than letting months of history vanish quietly.
+container restarts. A SQLite file there is real working storage, but it is not
+history - the news the app collects will not build up over time.
 
-For history that lasts, in order of simplicity:
+### Permanent storage (PostgreSQL)
 
-1. **Run it on your PC** (the default). Nothing to set up.
-2. **Point `UFC_RADAR_DB` at a disk that survives restarts** - a VPS disk or a
-   container volume.
-3. **PostgreSQL.** The schema was written to port cleanly, and `DATABASE_URL`
-   is recognised, but this version has no PostgreSQL driver. If you set that
-   variable, Settings tells you plainly that data is still going to SQLite -
-   the app will not pretend to use a database it cannot reach.
+For history that lasts on a host like that, give the app a database instead of
+a file. Add one line to the app's **Secrets** box:
 
-If you deploy anyway, take a backup (Settings → Database) before each redeploy
-and restore it afterwards.
+```toml
+DATABASE_URL = "postgresql://user:password@host:5432/ufc_news_radar"
+```
+
+That is the whole setup. The app creates its schema, runs its migrations and
+uses PostgreSQL for everything; nothing else changes. Any managed PostgreSQL
+works - Neon, Supabase, Railway and Amazon RDS all have a free or near-free
+tier that is more than this app needs.
+
+Two deliberate behaviours:
+
+* **It will not quietly fall back.** If `DATABASE_URL` is set but the driver
+  is missing, the app refuses to start and says why, rather than writing to a
+  local file you were not expecting.
+* **Backups change hands.** With PostgreSQL, backups are your provider's
+  (managed snapshots or `pg_dump`). Settings says so instead of offering a
+  file export that would contain nothing.
+
+Both backends run the same test suite - see *Running the tests* below.
+
+Without `DATABASE_URL`, the options in order of simplicity are: run it on your
+PC (the default, nothing to set up); point `UFC_RADAR_DB` at a disk that
+survives restarts (a VPS disk, a container volume); or take a backup
+(Settings → Database) before each redeploy and restore it afterwards.
 
 ### Collecting without pressing Refresh
 
-The collector runs independently of the dashboard:
+The dashboard *reads* news. Something else has to collect it, because a
+Streamlit page only runs while somebody has it open, and a collection takes a
+minute or two.
 
 ```bat
-python scripts\collect.py --loop 20
+python scripts\scheduler.py --minutes 20
 ```
 
-That collects every 20 minutes for as long as the window is open. For something
-that survives a reboot, use Windows **Task Scheduler** to run
-`scripts\collect.py` every 15-30 minutes. The dashboard reads whatever the
-collector has stored, so the two do not need to run together.
+That keeps collecting whether or not the app is open. Point it at the same
+database as the app (`UFC_RADAR_DB`, or `DATABASE_URL`) and the dashboard
+simply reads what it wrote. Only one collection runs at a time, wherever it
+was started from - the lock lives in the database.
+
+For something that survives a reboot:
+
+* **Windows**: Task Scheduler → *Start a program* →
+  `<project>\.venv\Scripts\python.exe scripts\scheduler.py --once`, repeating
+  every 20 minutes.
+* **Linux/macOS**: `*/20 * * * * cd /path && .venv/bin/python
+  scripts/scheduler.py --once`, or a systemd service without `--once`.
+* **A container**: run it as a second service beside the web app.
+
+There is also a background thread inside the app (Settings → *Collect in the
+background while the app is open*). It is genuinely useful where a second
+process is impossible, and it is honest about its limit: it stops when the app
+stops. It is not a replacement for the above.
+
 
 ---
 

@@ -53,9 +53,15 @@ def enrich_article(item: Dict[str, Any], index: Optional[Any] = None) -> Dict[st
         # The category rules saw result words; the intent rules know better.
         item["category"] = Category.GENERAL.value
 
-    item["fighters"] = find_fighters(text_for_analysis, index)
+    # Matchups are learned from the headline only: "A vs. B" in a headline is
+    # a booking, the same words deep in body copy are often hypothetical.
+    item["fighters"] = list(dict.fromkeys(
+        find_fighters(item.get("title") or "", index)
+        + find_fighters(text_for_analysis, index, include_matchups=False)
+    ))[:8]
     known_events = [event for event in (item.get("events") or []) if event]
     item["events"] = find_events(text_for_analysis, known_events)
+
     item["weight_classes"] = find_weight_classes(text_for_analysis)
 
     source_type = normalize_source_type(item.get("source_type"))

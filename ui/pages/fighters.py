@@ -12,7 +12,9 @@ from database import repo_settings as settings_repo
 from database import repo_social as social_repo
 from database import repo_stories as stories_repo
 from models.types import Category, StoryStatus
+from processors.bout_status import describe_bout
 from ui import nav
+
 from ui.components import (
     bullet_list, metric_row, navigate, page_header, section_header, story_grid,
 )
@@ -32,7 +34,31 @@ def render_router() -> None:
 
 def render_list() -> None:
     page_header("FIGHTERS", "Names the app recognises in collected reporting.")
+
+    # Before anything has been collected the table still holds the built-in
+    # name list - it exists so entity matching works, not because these
+    # fighters have been in the news. Showing 134 tiles reading "0 mentions"
+    # on a cold start is the one screen in the app that looks like data when
+    # there is none, so it says so instead.
+    if not articles_repo.article_count():
+        st.markdown(
+            '<div class="emptystate"><div class="big">NO NEWS COLLECTED YET</div>'
+            '<div class="sub">The app already recognises a list of fighter names, but nobody '
+            'has been mentioned yet because nothing has been collected.<br>'
+            'Press <b>Refresh now</b> in the sidebar, then come back - fighters appear here '
+            'as the reporting names them.</div></div>',
+            unsafe_allow_html=True)
+        with st.expander("Show the built-in name list anyway"):
+            names = [fighter["name"] for fighter in entities_repo.list_fighters(limit=400,
+                                                                               order="name")]
+            st.caption(f"{len(names)} names the app can already match in an article. "
+                       "None of them has been mentioned in collected news yet.")
+            st.markdown('<div class="muted">' + " · ".join(names) + "</div>",
+                        unsafe_allow_html=True)
+        return
+
     columns = st.columns([2, 1, 1])
+
     term = columns[0].text_input("Search fighters", key="fighter_search", placeholder="name or nickname")
     order = columns[1].selectbox("Sort by", ["Most mentioned", "Recently mentioned", "Name"],
                                  key="fighter_order")
@@ -197,8 +223,9 @@ def _render_upcoming(name: str) -> None:
             f'<div class="panel"><div class="kv"><b>{row["fighter_a"]} vs. {row["fighter_b"]}</b> · '
             f'{row["event_name"]}'
             + (f' · {format_display(row.get("event_date"), "%b %d, %Y")}' if row.get("event_date") else "")
-            + f'</div><div class="muted">status: {row.get("status")} · confidence: '
-            f'{row.get("confidence")} · source: {row.get("source_name") or "n/a"}</div></div>',
+            + f'</div><div class="muted">{describe_bout(row)}</div></div>',
+
+
             unsafe_allow_html=True,
         )
 

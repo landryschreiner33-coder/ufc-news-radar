@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 # ------------------------------------------------------------- statuses ----
@@ -70,8 +70,103 @@ def status_badge(status: Optional[str]) -> str:
     return f"{style.emoji} {style.label}"
 
 
+# ------------------------------------------------- source counting terms ---
+# One vocabulary for source counts, used verbatim wherever they are shown.
+# The distinction is a product rule, not a wording preference: a publication
+# that ran a report is a NEWS SOURCE; an X post is a SOCIAL SIGNAL. They are
+# counted in separate pools and never added together, because an X post
+# linked to a story must never turn "two outlets reported this" into
+# "three sources".
+LABEL_TOTAL_NEWS_SOURCES = "Total news sources"
+LABEL_INDEPENDENT_NEWS_SOURCES = "Independent news sources"
+LABEL_SOCIAL_POSTS = "Social posts"
+
+
+def source_counts(story: Dict[str, Any]) -> Dict[str, int]:
+    """The three counts a story is described by, from its stored columns.
+
+    ``independent`` is clamped to ``total`` as a last line of defence: the
+    numbers are computed together in ``processors/verification.py``, but a row
+    written by an older build must still never render an impossible claim.
+    """
+    total = max(0, int(story.get("source_count") or 0))
+    independent = max(0, int(story.get("independent_source_count") or 0))
+    return {
+        "total": total,
+        "independent": min(independent, total),
+        "social": max(0, int(story.get("social_post_count") or 0)),
+    }
+
+
+def source_count_line(story: Dict[str, Any], separator: str = " · ") -> str:
+    """"2 news sources · 2 independent · 3 X posts" - the one-line form."""
+    counts = source_counts(story)
+    parts = [
+        f"{counts['total']} news source{'s' if counts['total'] != 1 else ''}",
+        f"{counts['independent']} independent",
+    ]
+    if counts["social"]:
+        parts.append(f"{counts['social']} X post{'s' if counts['social'] != 1 else ''}")
+    return separator.join(parts)
+
+
+# ------------------------------------------------------ collection runs ----
+class CollectionOutcome(str, Enum):
+    """What a collection run actually achieved.
+
+    Deliberately separate from "a run happened". A run in which every source
+    failed is a TOTAL_FAILURE; showing "last updated just now" after one is a
+    false claim about the data, which is the worst kind of bug in an app whose
+    whole point is not overstating what is known.
+    """
+
+    SUCCESS = "SUCCESS"                # every attempted source returned
+    PARTIAL = "PARTIAL"                # some returned, some failed
+    TOTAL_FAILURE = "TOTAL_FAILURE"    # sources were attempted, none returned
+    NOT_RUN = "NOT_RUN"                # never run, or nothing was enabled
+
+
+COLLECTION_OUTCOME_STYLES: Dict[str, StatusStyle] = {
+    CollectionOutcome.SUCCESS: StatusStyle(
+        "✅", "COLLECTION OK", "#19c37d",
+        "Every enabled source returned on the last run.",
+    ),
+    CollectionOutcome.PARTIAL: StatusStyle(
+        "⚠️", "PARTIAL UPDATE", "#e8c547",
+        "Some sources failed on the last run, so the feed may be missing stories.",
+    ),
+    CollectionOutcome.TOTAL_FAILURE: StatusStyle(
+        "❌", "COLLECTION FAILED", "#ef4444",
+        "No source returned on the last run. Nothing was updated and the data "
+        "on screen may be stale.",
+    ),
+    CollectionOutcome.NOT_RUN: StatusStyle(
+        "⚪", "NOT RUN", "#9aa4b2",
+        "No collection has run yet.",
+    ),
+}
+
+
+def collection_outcome_for(attempted: int, succeeded: int) -> str:
+    """The one place the outcome is decided, from the run's own numbers."""
+    if attempted <= 0:
+        return CollectionOutcome.NOT_RUN.value
+    if succeeded <= 0:
+        return CollectionOutcome.TOTAL_FAILURE.value
+    if succeeded < attempted:
+        return CollectionOutcome.PARTIAL.value
+    return CollectionOutcome.SUCCESS.value
+
+
+def collection_outcome_style(outcome: Optional[str]) -> StatusStyle:
+    return COLLECTION_OUTCOME_STYLES.get(
+        str(outcome or "").upper(), COLLECTION_OUTCOME_STYLES[CollectionOutcome.NOT_RUN]
+    )
+
+
 # ---------------------------------------------------------- source types ---
 class SourceType(str, Enum):
+
     OFFICIAL = "OFFICIAL"
     MAJOR_NEWS = "MAJOR_NEWS"
     ESTABLISHED_JOURNALIST = "ESTABLISHED_JOURNALIST"
@@ -259,15 +354,22 @@ class EventStatus(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
+# The meanings here describe the STATUS only, never the schedule data behind
+# it: an event can be UPCOMING with an exact start time or with nothing but a
+# calendar day, and a fixed sentence claiming "the start time collected from
+# the official schedule" contradicted the reason printed underneath it
+# whenever no start time existed. The schedule-specific sentence is built per
+# event by ``processors.event_lifecycle.status_explanation``.
 EVENT_STATUS_STYLES: Dict[str, StatusStyle] = {
     EventStatus.UPCOMING: StatusStyle(
         "\U0001F4C5", "UPCOMING", "#3b82f6",
-        "Scheduled. The start time collected from the official schedule is still in the future.",
+        "Scheduled, and it has not started yet.",
     ),
     EventStatus.LIVE: StatusStyle(
         "\U0001F534", "LIVE NOW", "#ef4444",
-        "The scheduled start has passed and the event is inside its expected running window.",
+        "Inside its expected running window.",
     ),
+
     EventStatus.COMPLETED: StatusStyle(
         "✅", "COMPLETED", "#19c37d",
         "Reliable evidence was collected that this event finished.",

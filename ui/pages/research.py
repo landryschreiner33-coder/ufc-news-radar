@@ -10,7 +10,14 @@ from ai.context import build_story_context
 from database import repo_entities as entities_repo
 from database import repo_social as social_repo
 from database import repo_stories as stories_repo
-from models.types import category_label, status_style
+from models.types import (
+    LABEL_INDEPENDENT_NEWS_SOURCES,
+    LABEL_SOCIAL_POSTS,
+    LABEL_TOTAL_NEWS_SOURCES,
+    category_label,
+    source_counts,
+    status_style,
+)
 from processors import developing as developing_mod
 from ui.components import (
     bullet_list,
@@ -89,11 +96,12 @@ def render(story_id: int) -> None:
     if story.get("is_demo"):
         notice("This is DEMO DATA - a fictional example, not real UFC news.", kind="demo")
 
+    counts = source_counts(story)
     metric_row([
         ("Status", status_style(story.get("status")).label),
-        ("Sources", int(story.get("source_count") or 0)),
-        ("Independent", int(story.get("independent_source_count") or 0)),
-        ("X posts", int(story.get("social_post_count") or 0)),
+        (LABEL_TOTAL_NEWS_SOURCES, counts["total"]),
+        (LABEL_INDEPENDENT_NEWS_SOURCES, counts["independent"]),
+        (LABEL_SOCIAL_POSTS, counts["social"]),
         ("Relevance", f"{float(story.get('relevance') or 0):.0f}"),
         ("Source support", f"{float(story.get('support_score') or 0):.0f}"),
         ("Updates", int(story.get("update_count") or 0)),
@@ -139,11 +147,18 @@ def _render_research(context, story: Dict[str, Any]) -> None:
     with right:
         section_header("WHAT IS CLAIMED")
         bullet_list(breakdown.get("what_is_claimed", []), empty="No claims collected.")
-        section_header("WHAT IS NOT CONFIRMED")
-        bullet_list(breakdown.get("what_is_not_confirmed", []), empty="No obvious gaps.")
+        section_header("WHAT IS NOT CONFIRMED",
+                       note="How strong the sourcing is - not what the sources left out.")
+        bullet_list(breakdown.get("what_is_not_confirmed", []),
+                    empty="Nothing further to flag about the sourcing.")
+        section_header("STILL UNKNOWN",
+                       note="Details the collected sources do not answer.")
+        bullet_list(breakdown.get("what_is_missing", []),
+                    empty="Nothing obvious missing from the collected material.")
         section_header("CONFLICTING INFORMATION")
         bullet_list(breakdown.get("conflicting", []),
                     empty="No contradictions detected in the collected sources.")
+
 
     section_header("SOURCE SUPPORT")
     assessment = ai_service.assess_source_support(int(story["id"]))
@@ -263,8 +278,15 @@ def _render_sources(context, story_id: int) -> None:
     section_header("TIMELINE", note="Oldest first - how the story developed.")
     timeline(developing_mod.timeline_view(story_id))
 
-    section_header("SOURCES", len(context.sources))
+    counts = source_counts(context.story)
+    section_header(
+        "ALL SOURCE MATERIAL", len(context.sources),
+        note=f"{counts['total']} news source(s) · {counts['independent']} independent · "
+             f"{counts['social']} X post(s). News sources and X posts are listed together "
+             "here but counted separately everywhere else - an X post is a signal, not an "
+             "outlet.")
     source_list(context.sources_for_display())
+
 
     engagement = social_repo.engagement_for_story(story_id)
     engagement_note = ""

@@ -5,7 +5,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import streamlit as st
 
-from models.types import category_label, status_style
+from models.types import category_label, source_counts, status_style
 from ui import nav
 from ui.theme import chip, relevance_bar, status_badge_html, support_meter_html
 from utils.textutil import truncate
@@ -87,8 +87,8 @@ def story_card(story: Dict[str, Any], key_prefix: str = "", show_button: bool = 
     style = status_style(story.get("status"))
     fighters = "".join(chip(name, "fighter") for name in (story.get("fighters") or [])[:4])
     events = "".join(chip(name, "event") for name in (story.get("events") or [])[:2])
-    social_count = int(story.get("social_post_count") or 0)
-    social_html = f' · <b>{social_count}</b> X post(s)' if social_count else ""
+    counts = source_counts(story)
+    social_html = f' · <b>{counts["social"]}</b> X post(s)' if counts["social"] else ""
     conflict_html = ' · <b style="color:#ff9130">sources disagree</b>' if story.get("has_conflict") else ""
     flags = []
     if story.get("is_breaking"):
@@ -100,24 +100,26 @@ def story_card(story: Dict[str, Any], key_prefix: str = "", show_button: bool = 
     if story.get("is_demo"):
         flags.append('<span class="badge" style="background:#6b2b7a33;color:#f0b9ff;border:1px solid #6b2b7a">DEMO DATA</span>')
 
+    # Single line on purpose: a blank or indented line inside an HTML block
+    # ends it and Streamlit escapes the rest - see ui/cards.py.
     st.markdown(
-        f"""<div class="story-card" style="border-left-color:{style.color}">
-  <div>{status_badge_html(story.get('status'))} {' '.join(flags)}</div>
-  <h3>{_escape(story.get('headline') or 'Untitled')}</h3>
-  <div class="summary">{_escape(truncate(story.get('summary') or '', 260))}</div>
-  <div class="meta">
-    <b>{int(story.get('source_count') or 0)}</b> source(s) ·
-    <b>{int(story.get('independent_source_count') or 0)}</b> independent ·
-    {category_label(story.get('category'))} ·
-    updated {humanize_age(story.get('last_updated_at'))}{social_html}{conflict_html}
-  </div>
-  <div style="margin-top:6px">{fighters}{events}</div>
-  {relevance_bar(story.get('relevance') or 0)}
-  <div class="meta" style="margin-top:4px">relevance {float(story.get('relevance') or 0):.0f}/100
-    · source support {float(story.get('support_score') or 0):.0f}/100</div>
-</div>""",
+        f'<div class="story-card" style="border-left-color:{style.color}">'
+        f'<div>{status_badge_html(story.get("status"))} {" ".join(flags)}</div>'
+        f'<h3>{_escape(story.get("headline") or "Untitled")}</h3>'
+        f'<div class="summary">{_escape(truncate(story.get("summary") or "", 260))}</div>'
+        f'<div class="meta"><b>{counts["total"]}</b> news source(s) · '
+        f'<b>{counts["independent"]}</b> independent · '
+        f'{category_label(story.get("category"))} · '
+        f'updated {humanize_age(story.get("last_updated_at"))}{social_html}{conflict_html}</div>'
+        f'<div style="margin-top:6px">{fighters}{events}</div>'
+        f'{relevance_bar(story.get("relevance") or 0)}'
+        f'<div class="meta" style="margin-top:4px">'
+        f'relevance {float(story.get("relevance") or 0):.0f}/100 · '
+        f'source support {float(story.get("support_score") or 0):.0f}/100</div>'
+        '</div>',
         unsafe_allow_html=True,
     )
+
     if show_button:
         if st.button("READ MORE →", key=f"{key_prefix}_read_{story.get('id')}",
                      width="stretch"):

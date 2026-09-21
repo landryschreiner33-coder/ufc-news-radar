@@ -103,24 +103,50 @@ class UFCRankingsCollector(BaseCollector):
         return result
 
 
-# ------------------------------------------------------------- parsing ------
+# ------------------------------------------------------- label cleaning ----
+#: Wording that turns up next to the system label on the page and is not part
+#: of it - navigation, table headers and the page title.
+_LABEL_NOISE = re.compile(
+    r"\b(rankings?\s*\|\s*ufc|top\s+rank(ing)?s?|pound[- ]for[- ]pound|men'?s|women'?s|"
+    r"home|news|events?|watch|shop|athletes?|division|rank\b|\d+)\b",
+    re.IGNORECASE,
+)
+
+
+def clean_system_label(raw: str) -> str:
+    """Trim scraped page furniture off a system label.
+
+    The label is read off a full-page text dump, so without this the stored
+    value was the surrounding 100 characters - "Rankings | UFC Meta UFC
+    Rankings - as of September 16, 2026 Men's Pound-for-Pound Top Rank 1" -
+    which is page navigation, a date and a table header, not a system name.
+    """
+    text = collapse_whitespace(raw or "")
+    text = _LABEL_NOISE.sub(" ", text)
+    text = re.sub(r"[|—–\-:,]+", " ", text)
+    text = re.sub(r"\bas of\b.*$", "", text, flags=re.IGNORECASE)
+    return collapse_whitespace(text).strip(" -|:")
+
+
 def detect_ranking_system(page_text: str) -> Tuple[str, str]:
     """Read the ranking system label off the page instead of assuming one.
 
-    Returns (system_name, system_version).  ``system_version`` keeps the exact
-    phrase found so a later change of system is visible in the database.
+    Returns (system_name, system_version).  ``system_version`` is the exact
+    phrase the page used, cleaned of surrounding page furniture, so a later
+    change of system is visible in the database without storing scraped noise.
     """
     haystack = collapse_whitespace(page_text or "")
     lowered = haystack.lower()
     for pattern, label in _SYSTEM_PATTERNS:
         match = re.search(pattern, lowered)
         if match:
-            start = max(0, match.start() - 40)
-            context = collapse_whitespace(haystack[start:match.end() + 60])
-            return label, context[:160]
+            phrase = collapse_whitespace(haystack[match.start():match.end()])
+            version = clean_system_label(phrase) or label
+            return label, version[:80]
     return "UFC Rankings (system label not found on page)", "unlabelled"
 
 
+# ------------------------------------------------------------- parsing ------
 def detect_ranking_date(page_text: str) -> Optional[str]:
     haystack = collapse_whitespace(page_text or "")
     for pattern in _DATE_PATTERNS:

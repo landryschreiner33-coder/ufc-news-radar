@@ -533,7 +533,12 @@ FIGHTER_NAMES: List[tuple] = [
 DEFAULT_SETTINGS: List[tuple] = [
     # key, value, type, (comment for humans)
     ("refresh_interval_minutes", "20", "int"),
-    ("auto_collect_on_start", "0", "bool"),
+    # Background collection, off until switched on. The collector that keeps
+    # working while the app is closed is scripts/scheduler.py; this in-app
+    # thread is the fallback for hosts where a second process is impossible.
+    ("auto_collect_enabled", "0", "bool"),
+    ("auto_collect_interval_minutes", "20", "int"),
+
     ("min_relevance", "0", "int"),
     ("default_sort", "Newest", "str"),
     ("default_filter", "ALL", "str"),

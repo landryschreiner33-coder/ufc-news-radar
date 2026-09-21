@@ -1,13 +1,26 @@
 """Shared pytest fixtures.
 
-Every test gets its own SQLite file, so tests never see each other's data and
-never touch the real database.
+Every test gets its own database, so tests never see each other's data and
+never touch the real one.
+
+By default that is a SQLite file. Set ``UFC_RADAR_TEST_DATABASE_URL`` to run
+the identical suite against PostgreSQL - the same tests, the same assertions,
+the other backend:
+
+    UFC_RADAR_TEST_DATABASE_URL=postgresql://user:password@127.0.0.1/radar_test \\
+        python -m pytest
+
+
+The PostgreSQL run drops and recreates the public schema per test, which is
+why it needs a database of its own.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
+
 
 import pytest
 
@@ -15,9 +28,28 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from database.db import close_connection, init_db, set_database_path  # noqa: E402
-from processors.entities import reset_fighter_index                   # noqa: E402
+from database.db import (  # noqa: E402
+    close_connection,
+    get_connection,
+    init_db,
+    set_database_path,
+    set_database_url,
+)
+from processors.entities import reset_indexes                         # noqa: E402
 from utils.timeutil import to_iso, utcnow                             # noqa: E402
+
+TEST_DATABASE_URL = os.getenv("UFC_RADAR_TEST_DATABASE_URL", "").strip()
+
+#: For tests that only make sense against a local SQLite file.
+running_on_postgres = bool(TEST_DATABASE_URL)
+
+
+def _reset_postgres_schema() -> None:
+    """Empty the test database between tests, cheaply and completely."""
+    connection = get_connection()
+    connection.execute("DROP SCHEMA public CASCADE")
+    connection.execute("CREATE SCHEMA public")
+    connection.commit()
 
 
 @pytest.fixture(autouse=True)
@@ -31,13 +63,20 @@ def temp_database(tmp_path, monkeypatch):
 
     get_config(refresh=True)
     database_file = tmp_path / "test_radar.db"
-    set_database_path(str(database_file))
+    if TEST_DATABASE_URL:
+        set_database_path(str(database_file))
+        set_database_url(TEST_DATABASE_URL)
+        _reset_postgres_schema()
+    else:
+        set_database_url(None)
+        set_database_path(str(database_file))
     init_db()
-    reset_fighter_index()
+    reset_indexes()
     yield database_file
     close_connection()
+    set_database_url(None)
     set_database_path(None)
-    reset_fighter_index()
+    reset_indexes()
 
 
 def hours_ago(hours: float) -> str:

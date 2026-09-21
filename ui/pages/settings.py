@@ -5,10 +5,11 @@ import streamlit as st
 
 from ai.factory import available_providers
 from ai import service as ai_service
+from collectors import scheduler
 from database import repo_ai as ai_repo
 from database import repo_settings as settings_repo
 from database import repo_sources as sources_repo
-from database.db import database_stats, current_db_path
+from database.db import database_stats
 from database.demo_data import clear_demo_data, demo_counts, demo_data_present, load_demo_data
 from models.types import SORT_OPTIONS, FEED_FILTERS, SourceType
 from social.x_monitor import x_status_panel
@@ -86,6 +87,24 @@ def _render_general() -> None:
         "Headline-match threshold", 0.3, 0.95,
         settings_repo.get_float("story_title_similarity_threshold", 0.62), 0.02)
 
+    section_header(
+        "BACKGROUND COLLECTION",
+        note="The dashboard reads results; something has to produce them. The collector that "
+             "keeps working while this app is closed is `python scripts/scheduler.py` - run it "
+             "beside the app and point both at the same database.")
+    columns = st.columns([1.4, 1, 2])
+    auto_collect = columns[0].toggle(
+        "Collect in the background while the app is open",
+        value=settings_repo.get_bool(scheduler.ENABLED_SETTING, False),
+        help="A thread inside this app process. It stops when the app stops, so it is a "
+             "fallback, not a replacement for running the collector separately.")
+    auto_interval = columns[1].number_input(
+        "Every (minutes)", scheduler.MIN_INTERVAL_MINUTES, 240,
+        settings_repo.get_int(scheduler.INTERVAL_SETTING, scheduler.DEFAULT_INTERVAL_MINUTES), 5,
+        help=f"Never below {scheduler.MIN_INTERVAL_MINUTES} minutes - news feeds do not change "
+             "faster than that and the sources deserve better.")
+    columns[2].caption(scheduler.status().summary)
+
     section_header("ARTICLE TEXT")
     columns = st.columns(2)
     fetch_text = columns[0].toggle(
@@ -111,6 +130,8 @@ def _render_general() -> None:
         settings_repo.set_setting("story_title_similarity_threshold", float(title_similarity), "float")
         settings_repo.set_setting("article_fetch_full_text", bool(fetch_text), "bool")
         settings_repo.set_setting("article_fetch_limit_per_run", int(fetch_limit), "int")
+        settings_repo.set_setting(scheduler.ENABLED_SETTING, bool(auto_collect), "bool")
+        settings_repo.set_setting(scheduler.INTERVAL_SETTING, int(auto_interval), "int")
         st.success("Saved. New thresholds apply on the next collection run.")
 
 
@@ -259,20 +280,32 @@ def _render_demo() -> None:
 
 
 def _render_database() -> None:
+    from database.persistence import storage_report
+
     section_header("DATABASE")
-    config = get_config()
-    st.markdown(f'<div class="kv">SQLite file: <code>{current_db_path()}</code></div>',
-                unsafe_allow_html=True)
+    report = storage_report()
+    # No filesystem path: it is server-side detail the reader cannot act on,
+    # and printing it tells anyone looking over their shoulder where the app
+    # lives. The description below is what is actually useful.
+    st.markdown(
+        f'<div class="kv">Storage: <b>{report.location}</b><br>'
+        f'Backend: <b>{report.backend}</b>'
+        + (f' · size <b>{report.size_mb} MB</b>' if report.backend.startswith("sqlite") else "")
+        + '</div>',
+        unsafe_allow_html=True)
     stats = database_stats()
+
     import pandas as pd
 
     frame = pd.DataFrame([{"Table": key, "Rows": value} for key, value in stats.items()])
     st.dataframe(frame, width="stretch", hide_index=True, height=420)
     bullet_list([
-        "Change the location with UFC_RADAR_DB in .env.",
-        "Deleting the file resets everything; the app rebuilds the schema on the next start.",
-        "The schema is kept PostgreSQL-friendly (ISO-8601 UTC timestamps, JSON text columns).",
+        "Change the SQLite location with UFC_RADAR_DB in .env.",
+        "Set DATABASE_URL to use PostgreSQL instead - that is the option for permanent "
+        "history on a host with a temporary filesystem.",
+        "Deleting the database resets everything; the app rebuilds the schema on the next start.",
     ])
+
     _render_storage()
     _render_backup()
 
@@ -294,10 +327,20 @@ def _render_storage() -> None:
 
 
 def _render_backup() -> None:
-    from database.persistence import export_bytes, restore_database, validate_backup
+    from database.persistence import (
+        backup_supported, export_bytes, restore_database, validate_backup,
+    )
 
     section_header("BACKUP & RESTORE",
                    note="A backup is a single file. Keep one before any redeploy.")
+    if not backup_supported():
+        st.markdown(
+            '<div class="kv">This app is using PostgreSQL, so backups belong to your database '
+            'provider (managed snapshots, or <code>pg_dump</code>). The file export here only '
+            'applies to SQLite, and pretending otherwise would give you a backup that '
+            'contained nothing.</div>', unsafe_allow_html=True)
+        return
+
     columns = st.columns([1, 1])
     with columns[0]:
         try:

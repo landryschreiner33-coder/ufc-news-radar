@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from database import repo_entities as entities_repo
 from models.types import Category, SourceType, normalize_source_type
+from processors import bout_status as bout_model
 from processors.entities import find_matchups, find_weight_classes, get_fighter_index, is_title_fight
 from utils.logging_setup import get_logger
 from utils.textutil import collapse_whitespace, normalize_text
@@ -183,7 +184,14 @@ def _apply_to_card(
     if not event_id or len(change.fighters) < 2:
         return None
     fighter_a, fighter_b = change.fighters[0], change.fighters[1]
-    official = normalize_source_type(article.get("source_type")) == SourceType.OFFICIAL.value
+    # An article is reporting, even when UFC.com published it. Only the
+
+    # official card collector may mark a bout as on the card.
+    reported_status = bout_model.classify(
+        from_official_card=False,
+        source_type=article.get("source_type"),
+        rumored=str(story.get("status") or "") in ("RUMOR", "UNVERIFIED"),
+    )
     if change.change_type == "new_fight":
         fight_id, created, item_changes = entities_repo.upsert_fight(
             event_id=event_id,
@@ -193,7 +201,7 @@ def _apply_to_card(
             is_title_fight=change.title_fight,
             segment=change.segment,
             status="scheduled",
-            confidence="official" if official else "reported",
+            bout_status=reported_status,
             source_article_id=article.get("id"),
             source_story_id=story.get("id"),
             source_url=article.get("url"),
@@ -240,8 +248,9 @@ def _apply_to_card(
                 is_title_fight=bool(fight.get("is_title_fight")) or change.title_fight,
                 segment=fight.get("segment") or change.segment,
                 status="scheduled",
-                confidence="official" if official else "reported",
+                bout_status=reported_status,
                 source_article_id=article.get("id"),
+
                 source_story_id=story.get("id"),
                 source_url=article.get("url"),
                 source_name=article.get("source_name"),

@@ -2,14 +2,86 @@
 
 Living status of UFC News Radar. Updated as work lands.
 
-**Last updated:** 2026-09-19
-**Test status:** ✅ 288 passed (`python -m pytest`)
+**Last updated:** 2026-09-21
+**Test status:** ✅ 409 passed on SQLite; ✅ 403 passed / 6 skipped on PostgreSQL
+(the same suite, `UFC_RADAR_TEST_DATABASE_URL=... python -m pytest`)
 **Data status:** ✅ `python scripts/validate_production_data.py` - 0 errors, 0 warnings
-**App status:** ✅ all 12 pages driven in Chromium; no exceptions, no console errors
+**App status:** ✅ 12 pages × 7 viewport widths driven in Chromium; no exceptions,
+no horizontal overflow, no escaped markup, no sidebar covering the feed
 
 ---
 
-## 1. The production overhaul (this round)
+## 1. The bug-fix and polish pass (this round)
+
+A read-only inspection of the running app found twelve defects plus a set of
+smaller ones. Every one is fixed at its cause and locked down by a named test
+in `tests/test_bugfix_regressions.py`.
+
+| # | Defect | Cause | Fix |
+| --- | --- | --- | --- |
+| D1 | Every non-rumour card printed `<div class="foot">` on screen as literal text | An empty `claim_block` left a blank line inside the card markup; CommonMark ended the HTML block and escaped the indented lines after it | `ui/cards.py` builds markup as fragments joined with no separator, and asserts the result contains no newline |
+| D2 | At 430px the sidebar covered the feed | `initial_sidebar_state="expanded"` forced it open at every width | `"auto"`, plus phone CSS that makes fixed-width card containers full-width |
+| D3 | A run where 0 of 14 sources succeeded still read "Last updated just now" | Nothing recorded what a run *achieved*, and the freshness stamp moved on every run | `CollectionOutcome` (SUCCESS / PARTIAL / TOTAL_FAILURE / NOT_RUN) derived from the run's own numbers; `last_collection_at` only moves when a source returned; a banner and status bar state it |
+| D4 | "SOURCES 2 / INDEPENDENT 3" | Independence counted linked X posts; the total counted only news outlets | News sources and social signals are separate pools in `processors/verification.py`, with an invariant assert; one vocabulary in `models/types.py` |
+| D5 | "OFFICIAL BOUTS 0" above a bout reading "confidence: official" | Two fields answering different questions, one defaulted by a migration | `processors/bout_status.py`: `official_status` (on UFC's card) + `evidence_level` (how strong), constrained so the contradiction cannot be stored |
+| D6 | One story shown twice on an event page | Each section filtered the whole list independently | Sections consume from a shared pool, as the dashboard already did |
+| D7 | "Safe to state: Alpha vs Bravo official for DEMO FIGHT NIGHT 1" beside "No event has been named" | Entities came only from the fighter registry, and demo data never registered its event | Entity detection learns events from the events table and fighters from a headline matchup; demo data registers its own event; gaps and sourcing are separate sections |
+| D8 | `/dashboard` raised Streamlit's "page not found" dialog | The default page is served at `/` only - `st.Page.url_path` returns `""` for it | `/` is canonical; a hidden alias page owns `/dashboard` and redirects |
+| D9 | An opened story sat at `/` with no parameters | `st.switch_page` drops the query string | The selection crosses in session state and `nav.sync_url` writes the URL after render. Refresh, bookmark, copy, back and forward all verified in Chromium |
+| D10 | Scripts said "The UFC just made it official - this story." | `subject_of` returned a filler word when nothing was detected | It returns `""` and every sentence has a subject-free variant; `build_script` asserts no placeholder survives |
+| D11 | "The start time … is still in the future" above "No start time has been collected" | A fixed sentence per status, whatever data the event had | `event_lifecycle.status_explanation` builds one sentence from the fields that exist |
+| D12 | "No stories collected yet" while the status bar read "Stories 9" | An empty LATEST section means "nothing left over", not "nothing collected" | The message says which |
+
+### Smaller items in the same pass
+
+- [x] **Source health reconciles**: one state per source
+      (HEALTHY / PARTIAL / STALE / ERROR / NOT_RUN / NOT_CONFIGURED / DISABLED),
+      exhaustive and mutually exclusive, so the counts add up to the total.
+- [x] **Placeholder art matches its subject** - an event card no longer says
+      "CARD CHANGE".
+- [x] **Ranking labels cleaned**: the stored system label is the phrase itself,
+      not the hundred surrounding characters of page navigation.
+- [x] **Article intent backfilled** by migration 5, so the preview/prediction
+      result gate applies to rows collected before the column existed.
+- [x] **Legacy columns dropped** (`events.status`, `fight_card_items.confidence`)
+      so a fresh database and an upgraded one have the same shape - with tests
+      that upgrade a v4 database for real.
+- [x] **The dead `auto_collect_on_start` setting removed**, replaced by
+      background collection that actually runs.
+- [x] **No filesystem path on the Settings page**.
+- [x] **Boolean settings fixed**: `set_setting(key, "0", "bool")` stored `1`,
+      because `if value` on the string `"0"` is true. Every boolean default
+      seeded as off was on.
+- [x] **`app.pid` removed from git** and added to `.gitignore`.
+
+### Persistence and background collection
+
+- [x] **PostgreSQL implemented, not promised.** `DATABASE_URL` switches the
+      whole app over; `database/backends.py` translates the one SQL dialect
+      the repositories are written in. The entire test suite runs against a
+      real PostgreSQL 16 server, not just SQLite.
+- [x] **No silent fallback.** A configured `DATABASE_URL` with no driver fails
+      at start-up with an explanation instead of writing to a local file.
+- [x] **`scripts/scheduler.py`** - the collector as its own process, on an
+      interval, with a lock held in the database so an app and a cron job
+      cannot collect over each other. Windows/cron/systemd/container recipes
+      are in the README.
+- [x] **In-app background collector** for hosts where a second process is
+      impossible, off by default and honest that it stops with the app.
+
+### Validator
+
+`scripts/validate_production_data.py` grew from 11 checks to 18. The new ones
+are the faults above expressed as data rules: impossible source counts,
+official/reported contradictions, unclassified intent, malformed links, legacy
+schema columns, dead settings and source-health reconciliation. Run against the
+real development database it found the D4 defect immediately and reported clean
+after a reprocess.
+
+---
+
+## 1b. The production overhaul (previous round)
+
 
 Three faults were reproduced in the *live* database - none of them visible to
 the old test suite, because those tests only ever saw freshly built fixtures.
@@ -113,14 +185,26 @@ the old test suite, because those tests only ever saw freshly built fixtures.
 | --- | --- | --- |
 | X monitoring | `X_BEARER_TOKEN` from an X developer account | Integration built and tested against recorded API responses; shows **X MONITORING - NOT CONFIGURED** until a token exists. |
 | AI-written summaries/scripts | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` | Providers implemented; app runs in labelled template mode meanwhile. |
-| Live feed verification | The build sandbox has no outbound internet (egress policy blocks every news domain; confirmed again this round - all 14 sources returned connection errors, each isolated, the run completed cleanly) | Collection, parsing and failure handling are tested against recorded fixtures. The first live run happens on your machine; Source health reports exactly what each source did. |
-| PostgreSQL storage | A driver and a database | The schema is PostgreSQL-friendly and `DATABASE_URL` is recognised, but no driver is implemented. The app *says so* rather than half-working. |
+| Live feed verification | The build sandbox has no outbound internet (egress policy blocks every news domain, `ufc.com`, and the deployed Streamlit app itself; confirmed again this round) | Collection, parsing and failure handling are tested against recorded fixtures. **No live UFC endpoint, feed, image or deployed page was verified in this pass.** The first live run happens on your machine; Source health reports exactly what each source did. |
+| Permanent history on Streamlit Cloud | A PostgreSQL database of your own | **The app side is done and tested.** Set `DATABASE_URL` in the app's Secrets box and it uses PostgreSQL for everything. What remains is external: create a database with any provider (Neon, Supabase, Railway, RDS) and paste its URL in. |
+
 
 ---
 
 ## 4. Known bugs
 
 None outstanding.
+
+Two behaviours worth knowing about, neither a bug:
+
+* Pressing **back** from a story lands on `/research` with the story still on
+  screen until the next interaction, because Streamlit does not rerun on a
+  query-string-only popstate. The URL is always one that works if reloaded,
+  and back again reaches the dashboard.
+* The in-app background collector only runs while the app process is alive.
+  That is a property of running inside a web page, and the Settings page says
+  so; `scripts/scheduler.py` is the answer that does not have it.
+
 
 ---
 

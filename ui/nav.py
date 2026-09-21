@@ -28,9 +28,63 @@ def get(key: str) -> Optional[Any]:
 
 #: Which selection each item parameter represents, and the session-state key
 #: that backs it. ``st.switch_page`` does not carry query parameters across, so
-#: the selection is held in session state as well and the URL parameter is kept
-#: purely so a story stays linkable and bookmarkable.
-ITEM_KEYS = {"story": "_radar_story", "event_id": "_radar_event", "name": "_radar_fighter"}
+#: the selection is held in session state as well and the URL parameter is
+#: written back by ``sync_url`` once the target page is running - that is what
+#: makes a story, event or fighter view linkable, bookmarkable and refreshable.
+ITEM_KEYS = {
+    "story": "_radar_story",
+    "event_id": "_radar_event",
+    "name": "_radar_fighter",
+    "q": "_radar_query",
+}
+
+#: (parameter, pages that own it, the page key to open it on). Used by the
+#: router in ``app.py`` so the ownership rules live next to the keys.
+ITEM_OWNERS = (
+    ("story", ("research", "tiktok-studio"), "research"),
+    ("event_id", ("events",), "events"),
+    ("name", ("fighters",), "fighters"),
+    ("q", ("search",), "search"),
+)
+
+
+def set_selection(parameter: str, value: Any) -> None:
+    """Record what the page is currently showing, for ``sync_url``."""
+    key = ITEM_KEYS.get(parameter)
+    if not key:
+        return
+    if value in (None, ""):
+        st.session_state.pop(key, None)
+    else:
+        st.session_state[key] = value
+
+
+def remember(parameter: str) -> None:
+    """Copy a URL parameter into session state so it survives a page switch.
+
+    Needed for a link that arrives on the wrong page - ``/?story=4`` - because
+    ``st.switch_page`` drops the query string on the way to the page that owns
+    the parameter, and the selection would be lost between the two.
+    """
+    value = st.query_params.get(parameter)
+    if value is not None:
+        st.session_state[ITEM_KEYS[parameter]] = value
+
+
+def sync_url(parameter: str) -> None:
+    """Make the address bar describe the selection this page is showing.
+
+    Setting a query parameter enqueues a URL update; it does not rerun the
+    script, so this is safe to call on every run of an owning page.
+    """
+    value = st.session_state.get(ITEM_KEYS.get(parameter, ""))
+    if value in (None, ""):
+        # Nothing selected: the URL must not keep advertising one.
+        if parameter in st.query_params:
+            del st.query_params[parameter]
+        return
+    if st.query_params.get(parameter) != str(value):
+        st.query_params[parameter] = str(value)
 
 
 def clear_items(*names: str) -> None:
@@ -54,8 +108,15 @@ def go(key: str, clear: tuple = ("story", "event_id", "name", "q")) -> None:
 
 
 def _open(parameter: str, value: Any, page_key: str) -> None:
+    """Open an item on the page that owns it.
+
+    The selection goes into session state only. Writing the URL parameter here
+    as well would add a history entry for a URL the very next navigation
+    throws away (``st.switch_page`` does not carry the query string), leaving
+    the browser's back button walking through states the user never saw. The
+    target page writes the real URL on arrival via ``sync_url``.
+    """
     st.session_state[ITEM_KEYS[parameter]] = value
-    st.query_params[parameter] = str(value)
     page = _PAGES.get(page_key)
     if page is not None:
         st.switch_page(page)
@@ -72,6 +133,10 @@ def open_event(event_id: int) -> None:
 
 def open_fighter(name: str) -> None:
     _open("name", str(name), "fighters")
+
+
+def open_search(term: str) -> None:
+    _open("q", str(term), "search")
 
 
 def selection(parameter: str) -> Optional[Any]:

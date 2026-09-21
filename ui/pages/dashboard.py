@@ -6,23 +6,23 @@ LATEST. Each section is a responsive card grid rather than a wall of text.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 import streamlit as st
 
 from ai import service as ai_service
 from database import repo_entities as entities_repo
+from database import repo_runs as runs_repo
 from database import repo_settings as settings_repo
 from database import repo_stories as stories_repo
 from database.demo_data import DEMO_BANNER, demo_data_present
-from models.types import EventStatus, event_status_style
-from processors.event_lifecycle import format_countdown
+from models.types import EventStatus
 from social.x_monitor import x_status_panel
 from ui import filters as filter_mod
-from ui import nav
 from ui.cards import card_grid, esc
 from ui.components import notice, page_header, section_header
-from utils.timeutil import format_display, humanize_age
+from utils.textutil import truncate
+from utils.timeutil import humanize_age
 
 
 def render(run_collection_callback) -> None:
@@ -31,6 +31,7 @@ def render(run_collection_callback) -> None:
 
     counts = stories_repo.dashboard_counts()
     _status_bar(counts)
+    _collection_banner(runs_repo.collection_status())
 
     if demo_data_present():
         notice(DEMO_BANNER, kind="demo")
@@ -66,14 +67,39 @@ def render(run_collection_callback) -> None:
 
 
 # ------------------------------------------------------------- status bar --
+def _collection_banner(status: Dict[str, Any]) -> None:
+    """A failed or partial run is stated plainly, above everything else.
+
+    The previous build recorded the failure only in a collapsed sidebar
+    expander while the status bar read "Last updated just now" - a false claim
+    about the data after a run in which nothing was collected.
+    """
+    if not status["needs_attention"]:
+        return
+    kind = "warn"
+    body = f'<b>{esc(status["headline"])}</b><br>{esc(status["detail"])}'
+    if status.get("error"):
+        body += f'<br><span style="opacity:.85">{esc(truncate(status["error"], 220))}</span>'
+    notice(body, kind=kind)
+
+
 def _status_bar(counts: Dict[str, Any]) -> None:
-    last_collection = settings_repo.get_setting("last_collection_at", "")
+    status = runs_repo.collection_status()
     x_status = x_status_panel()
     ai_status = ai_service.ai_status()
     live = entities_repo.list_events(limit=3, statuses=[EventStatus.LIVE.value])
 
+    # "Last updated" is the last run that actually returned something. A run
+    # in which every source failed never moves it.
+    if status["succeeded_at"]:
+        freshness = f'Data from <b>{esc(humanize_age(status["succeeded_at"]))}</b>'
+    else:
+        freshness = "Data from <b>no successful collection yet</b>"
     pieces = [
-        f'<span>Last updated <b>{esc(humanize_age(last_collection) if last_collection else "never")}</b></span>',
+        f'<span style="color:{status["color"]}">{status["emoji"]} '
+        f'<b style="color:{status["color"]}">{esc(status["label"])}</b></span>',
+        f'<span>{freshness}</span>',
+        f'<span>Sources <b>{status["sources_ok"]}/{status["sources_attempted"]}</b> OK</span>',
         f'<span>Stories <b>{counts["total"]}</b></span>',
         f'<span>Breaking <b style="color:#ff6b6b">{counts["breaking"]}</b></span>',
         f'<span>Rumors <b style="color:#ff9130">{counts["rumors"]}</b></span>',
@@ -151,8 +177,17 @@ def _render_sections(sort: str, min_relevance: float, search: str) -> None:
 
     render_upcoming_events()
 
-    section_header("\U0001F4F0 LATEST", len(sections["latest"]), "Everything else, newest first.")
-    card_grid(sections["latest"], "No stories collected yet - press Refresh now.", key="latest")
+    # The sections above consume from a shared pool, so an empty LATEST means
+    # "nothing left over", not "nothing collected". Saying the latter while
+    # the status bar reads "Stories 9" is simply false.
+    total_shown = sum(len(stories) for key, stories in sections.items() if key != "latest")
+    if total_shown:
+        empty_latest = "All current stories are shown in the sections above."
+    else:
+        empty_latest = "No stories collected yet - press Refresh now."
+    section_header("\U0001F4F0 LATEST", len(sections["latest"]),
+                   "Everything not already shown above, newest first.")
+    card_grid(sections["latest"], empty_latest, key="latest")
 
 
 def render_upcoming_events(limit: int = 4) -> None:

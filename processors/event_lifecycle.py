@@ -228,7 +228,67 @@ def resolve_event_status(
     return result
 
 
+# ------------------------------------------------ one status explanation --
+#: What the app actually knows about when the event starts.
+SCHEDULE_EXACT = "EXACT_START_KNOWN"
+SCHEDULE_DATE_ONLY = "DATE_KNOWN_TIME_UNKNOWN"
+SCHEDULE_NONE = "NO_SCHEDULE_COLLECTED"
+
+
+def schedule_state(event: Dict[str, Any]) -> str:
+    """Which of the three schedule situations this event is in."""
+    if parse_iso(event.get("scheduled_start_utc")) is not None:
+        return SCHEDULE_EXACT
+    day = str(event.get("event_date") or "")[:10]
+    if len(day) == 10:
+        return SCHEDULE_DATE_ONLY
+    return SCHEDULE_NONE
+
+
+def status_explanation(event: Dict[str, Any]) -> str:
+    """One sentence about this event's status, true of *this* event's data.
+
+    Built from the fields that are actually present rather than from a fixed
+    sentence per status. The previous build printed "The start time collected
+    from the official schedule is still in the future" directly above "No
+    start time has been collected" - two statements that cannot both hold.
+    """
+    status = str(event.get("event_status") or EventStatus.UNKNOWN.value).upper()
+    schedule = schedule_state(event)
+    start = to_iso(parse_iso(event.get("scheduled_start_utc")))
+    day = str(event.get("event_date") or "")[:10]
+
+    if status == EventStatus.CANCELLED.value:
+        return "Cancelled according to the collected sources. It is not going ahead."
+    if status == EventStatus.POSTPONED.value:
+        return ("Postponed according to the collected sources. No new date has been collected."
+                if schedule != SCHEDULE_EXACT else
+                f"Postponed according to the collected sources. The schedule still reads {start}.")
+    if status == EventStatus.COMPLETED.value:
+        return ("Reliable evidence was collected that this event finished. "
+                "A date that has passed is never enough on its own.")
+    if status == EventStatus.LIVE.value:
+        return (f"The scheduled start ({start}) has passed and the event is inside its "
+                "expected running window.")
+    if status == EventStatus.UPCOMING.value:
+        if schedule == SCHEDULE_EXACT:
+            return f"Scheduled to start at {start}, which is still in the future."
+        if schedule == SCHEDULE_DATE_ONLY:
+            return (f"Scheduled for {day}, which is still in the future. No start time has been "
+                    "collected, so the exact window is unknown.")
+        return "Described as upcoming in the collected sources, with no date collected yet."
+    # UNKNOWN
+    if schedule == SCHEDULE_EXACT:
+        return (f"The scheduled window that began at {start} has passed, and no reliable source "
+                "has been collected confirming the event took place. The app will not assume it did.")
+    if schedule == SCHEDULE_DATE_ONLY:
+        return (f"Scheduled for {day}, but no start time was collected, so the app cannot tell "
+                "whether it has started or finished. It will not guess.")
+    return "No date or start time has been collected for this event, so its status is unknown."
+
+
 def is_upcoming(status: Optional[str]) -> bool:
+
     return str(status or "").upper() in (EventStatus.UPCOMING.value, EventStatus.LIVE.value)
 
 

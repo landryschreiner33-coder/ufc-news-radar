@@ -87,15 +87,21 @@ Layers, bottom up:
 
 * **`utils/`** - config (env only), HTTP client (timeouts, retries, 429,
   conditional GETs), text/URL normalisation, UTC time helpers, logging, paths.
-* **`database/`** - SQLite schema, migrations, one repository module per domain
-  area, seed data and demo data.
+* **`database/`** - schema, migrations, one repository module per domain area,
+  seed data and demo data. `backends.py` chooses SQLite or PostgreSQL and
+  translates the one SQL dialect the repositories are written in;
+  `persistence.py` reports honestly on whether the storage actually persists.
+
 * **`models/types.py`** - the shared vocabulary (statuses, source types,
   categories, filters, sorts). Everything imports its labels from here.
 * **`collectors/`** - `BaseCollector` defines `collect() / normalize() /
   validate()`; `run()` wraps them so any failure is captured, recorded against
   that source and returned as a result object. `registry.py` maps the
   `adapter` column to a class. `runner.py` runs every enabled source and hands
-  results to the pipeline.
+  results to the pipeline. `scheduler.py` runs collection on an interval,
+  either as its own process (`scripts/scheduler.py`, the production answer) or
+  as a background thread inside the app.
+
 * **`processors/`** - the analysis. Entity extraction, rule-based
   categorisation, **intent classification (`result_safety.py`)**, TF-IDF/token
   similarity, clustering, verification, support, relevance, trending,
@@ -115,10 +121,25 @@ Layers, bottom up:
 
 ## 4. Important technical decisions
 
-**SQLite, PostgreSQL-friendly.** One file, zero setup for a beginner. All
-timestamps are ISO-8601 UTC strings in exactly `YYYY-MM-DDTHH:MM:SSZ` so string
+**SQLite locally, PostgreSQL in production.** One file, zero setup for a
+beginner; `DATABASE_URL` switches the whole app to PostgreSQL, which is what
+makes a deployment on a temporary filesystem keep its history. All timestamps
+are ISO-8601 UTC strings in exactly `YYYY-MM-DDTHH:MM:SSZ` so string
 comparison sorts chronologically and the values parse straight into
-`timestamptz` later. Lists/dicts are JSON text. No SQLite-only column types.
+`timestamptz`. Lists/dicts are JSON text. No SQLite-only column types.
+
+**One SQL dialect, translated.** Every repository writes SQLite SQL;
+`database/backends.py` rewrites it for PostgreSQL (`?` -> `%s`, `INSERT OR
+IGNORE` -> `ON CONFLICT DO NOTHING`, `LIKE` -> `ILIKE` to keep SQLite's
+case-insensitivity, `AUTOINCREMENT` -> `BIGSERIAL`, `RETURNING id` because
+there is no `lastrowid`). A second copy of every query would be a second place
+for the two to drift apart. Both backends run the whole test suite.
+
+**A configured backend is never silently swapped.** If `DATABASE_URL` is set
+and the driver is missing, start-up fails with an explanation. Writing to a
+local file while the operator believes their data is going to a managed
+database is the worst kind of bug this project can have.
+
 
 **Schema versioning.** `PRAGMA user_version` + a `migrations` table.
 `SCHEMA_VERSION` in `database/db.py` must equal the highest entry in
@@ -171,9 +192,42 @@ source trusted to report outcomes.
 anchors and drops their query string, and forces absolute URLs into a new tab,
 so a card built as `<a href="?story=12">` silently loses the id. The grid is
 `st.container(horizontal=True, wrap=True)` with a real button per card: it
-reflows 4/3/2/1 like a CSS grid and navigation actually works. Selections are
-also held in session state because `st.switch_page` does not carry query
-parameters across.
+reflows 4/3/2/1 like a CSS grid and navigation actually works.
+
+**Card markup carries no newlines.** `st.markdown` parses CommonMark before it
+renders HTML: a blank line ends an HTML block, and a following line indented
+four spaces becomes an escaped code block. Interpolating an empty string on its
+own line is enough to do it, which is why every non-rumour card once printed
+`<div class="foot">` on screen as literal text. `ui/cards.py` assembles markup
+as fragments joined with no separator and asserts the result is one line.
+
+**The URL describes what is on screen.** `st.switch_page` does not carry query
+parameters, so a selection is held in session state across the hop and written
+back into the URL by `nav.sync_url` *after* the page has rendered - doing it
+before leaves a history entry for a URL that never existed. The default page
+is served at `/` whatever `url_path` says (`st.Page.url_path` returns `""` for
+it), so `/dashboard` is a hidden alias page that redirects rather than raising
+Streamlit's "page not found" dialog.
+
+**News sources and social signals are counted apart.** A publication that ran
+a report is a news source; an X post is a signal. They live in separate pools
+in `processors/verification.py` and are never added together, because mixing
+them produced "2 sources, 3 independent" on screen. A status decision may use
+both (`corroboration_count`); a displayed count never does.
+
+**A bout answers two questions, not one.** `official_status` says whether UFC
+lists the bout on its own card - set only by the official card collector -
+and `evidence_level` says how strong the evidence is. An article published by
+UFC.com is `official_source`, which is strong reporting and still not a card
+entry. `processors/bout_status.py` constrains the pair so "not on the official
+card" and "confidence: official" cannot both be true of one row.
+
+**A run reports what it achieved, not that it happened.** SUCCESS / PARTIAL /
+TOTAL_FAILURE / NOT_RUN is derived from the run's own numbers in
+`repo_runs.finish_run`, and the freshness stamp only moves when a source
+actually returned. A run where every source failed must never leave the
+dashboard reading "last updated just now".
+
 
 **Time is stored in UTC and converted only for display.** `zoneinfo` applies
 the right DST offset per instant. Publication dates that are impossible or in
@@ -210,9 +264,17 @@ streamlit run app.py
 # collect without the UI
 python scripts/collect.py [--loop 20] [--source ufc_com] [--demo|--clear-demo]
 
+# the production collector: its own process, on a schedule
+python scripts/scheduler.py [--minutes 20] [--once]
+
 # tests
 python -m pytest
 python -m pytest tests/test_verification.py -v
+
+# the same suite against PostgreSQL (needs its own database - it drops the
+# schema between tests)
+UFC_RADAR_TEST_DATABASE_URL=postgresql://user:pass@localhost/ufc_radar_test \
+    python -m pytest
 ```
 
 ---
@@ -222,9 +284,10 @@ python -m pytest tests/test_verification.py -v
 `AI_PROVIDER`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `OPENAI_API_KEY`,
 `OPENAI_MODEL`, `OPENAI_BASE_URL`, `AI_MAX_CONTEXT_CHARS`, `X_BEARER_TOKEN`,
 `X_MAX_SEARCHES_PER_RUN`, `X_MAX_TIMELINES_PER_RUN`, `X_MAX_RESULTS_PER_QUERY`,
-`X_QUERY_CACHE_MINUTES`, `UFC_RADAR_DB`, `DATABASE_URL` (recognised, reported, not implemented),
-`HTTP_TIMEOUT_SECONDS`,
-`HTTP_USER_AGENT`, `UFC_RADAR_DEBUG`. See `.env.example` for descriptions.
+`X_QUERY_CACHE_MINUTES`, `UFC_RADAR_DB`, `DATABASE_URL` (PostgreSQL -
+implemented and tested; start-up fails rather than falling back if the driver
+is missing), `HTTP_TIMEOUT_SECONDS`, `HTTP_USER_AGENT`, `UFC_RADAR_DEBUG`.
+See `.env.example` for descriptions.
 
 User *preferences* (thresholds, enabled sources, watchlists, monitored
 accounts, sort order) live in the `settings` table and are edited in the UI -
@@ -251,7 +314,9 @@ never in `.env`.
 
 | Integration | Status | Notes |
 | --- | --- | --- |
+| PostgreSQL | working | `DATABASE_URL`; the whole test suite runs against it |
 | RSS/Atom feeds | working | 14 built-in sources, user-extendable |
+
 | UFC.com rankings | working | HTML parse, structured + generic fallback |
 | UFC.com events | working | HTML parse, card + fallback link scan |
 | Article extraction | working | trafilatura, short extract only, capped per run |
@@ -276,9 +341,16 @@ never in `.env`.
 * **Ranking changes need two snapshots.** The first collection has nothing to
   compare against.
 * **Fight cards are built from reporting**, so a card is only as complete as
-  what has been collected; each bout carries a confidence value.
-* **No scheduler.** Collection is manual (button or `scripts/collect.py
-  --loop`). Use Task Scheduler on Windows if you want it automatic.
+  what has been collected; each bout carries its own evidence level, and only
+  the official card collector may call a bout official.
+* **Collection needs something to run it.** `scripts/scheduler.py` is the
+  production answer (its own process, on an interval, with a database-held
+  lock). The in-app background thread only runs while the app process is
+  alive, and says so on the Settings page.
+* **Backups are SQLite-only.** On PostgreSQL they belong to the database
+  provider; the app says that rather than offering an export that would
+  contain nothing.
+
 * **The sandbox this was built in had no outbound internet access**, so live
   feeds could not be fetched during development. Collection, parsing, failure
   handling and the whole pipeline are tested against recorded fixtures, and the
@@ -296,19 +368,35 @@ change detection, canonical event identity, the event lifecycle and
 reconciliation, result safety, X integration (disabled without a token), the AI
 layer with template fallback, the full dashboard with research mode, TikTok
 Studio, check-before-reporting, watchlists, search, filters, source health,
-settings, backups, data corrections and demo mode.
+settings, backups, data corrections and demo mode - plus the PostgreSQL
+backend and the background collector added in the bug-fix pass.
 
-**288 pytest tests pass.** `scripts/validate_production_data.py` reports 0
-errors and 0 warnings. The app was driven end to end in Chromium: all 12 pages
-render with no exceptions and no console errors, and the card grid was measured
-reflowing 4 → 3 → 2 → 1 columns between 1800px and 430px with no horizontal
-overflow.
+**409 pytest tests pass on SQLite, and the same suite passes on PostgreSQL**
+(403 passed, 6 skipped there: the SQLite upgrade-path tests and the file-backup
+test).
+`scripts/validate_production_data.py` reports 0 errors and 0 warnings after a
+reprocess.
+
+The app was driven end to end in Chromium against a populated database:
+12 pages × 7 viewport widths (1920, 1440, 1024, 768, 600, 430, 390) with no
+horizontal overflow, no sidebar covering the feed, no clipped heading and no
+escaped markup on any card. `/dashboard` redirects to `/` with no error
+dialog; opening a story, event or fighter produces a real URL
+(`/research?story=4`) that survives refresh, bookmarking, back and forward.
 
 A fresh-database acceptance run against the recorded fixtures produced
 `10/14 sources OK` with the four failures isolated, statuses CONFIRMED /
 REPORTED / CONTESTED / RUMOR, two events both UPCOMING with their reasons and
 no duplicates, rankings under "Meta UFC Rankings", and official bouts with
 card changes recorded.
+
+**Live sources were not reachable from the build environment.** Outbound
+network access was blocked for `ufc.com`, the news feeds and the deployed
+Streamlit app, so no live endpoint was verified in this pass. Collection,
+parsing and failure handling are tested against recorded fixtures; the first
+real fetch happens on the user's machine and Source health reports exactly
+what each source did.
+
 
 See `AUDIT.md` for the faults found in the previous version and `PROGRESS.md`
 for the detailed status.

@@ -19,10 +19,13 @@ Permanent history, simplest first:
    the project folder and persists like any other file. Nothing to set up.
 2. **A mounted persistent disk.** Point ``UFC_RADAR_DB`` at a path on a volume
    that survives restarts (a VPS disk, a container volume).
-3. **PostgreSQL.** The schema was written to port cleanly - ISO-8601 UTC text
-   timestamps, no SQLite-only column types, JSON held as TEXT. ``DATABASE_URL``
-   is recognised and reported here, but the Postgres driver is *not*
-   implemented, and this module says so rather than half-working.
+3. **PostgreSQL.** Set ``DATABASE_URL`` to a managed PostgreSQL instance. This
+   is implemented (``database/backends.py``) and the whole test suite runs
+   against it, not just SQLite. It is the option for Streamlit Community
+   Cloud, whose filesystem is wiped on every restart.
+
+If ``DATABASE_URL`` is set but the driver is missing, start-up fails rather
+than quietly writing to a local file the operator was not expecting.
 """
 from __future__ import annotations
 
@@ -33,9 +36,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from database.db import close_connection, current_db_path, get_connection
+from database.backends import postgres_url
+from database.db import backend_name, close_connection, current_db_path, get_connection
 from utils.logging_setup import get_logger
 from utils.timeutil import utcnow_iso
+
 
 logger = get_logger(__name__)
 
@@ -57,19 +62,29 @@ class StorageReport:
     headline: str
     detail: str
     advice: List[str]
+    #: A description safe to put on screen. The real path is server-side
+    #: information the reader cannot act on and does not need.
+    location: str = "Local file"
 
     @property
     def size_mb(self) -> float:
         return round(self.size_bytes / (1024 * 1024), 2)
 
 
-def postgres_url() -> Optional[str]:
-    """A configured PostgreSQL URL, if the operator set one."""
-    for name in ("UFC_RADAR_DATABASE_URL", "DATABASE_URL"):
-        value = os.getenv(name)
-        if value and value.strip().startswith(("postgres://", "postgresql://")):
-            return value.strip()
-    return None
+def describe_location(path: str) -> str:
+    """Where the data lives, without printing a server filesystem path."""
+    if postgres_url():
+        return "Managed PostgreSQL database (set by DATABASE_URL)"
+    resolved = Path(path)
+    try:
+        inside_project = resolved.resolve().is_relative_to(Path.cwd())
+    except (OSError, ValueError):
+        inside_project = False
+    if path == ":memory:":
+        return "In memory (nothing is kept)"
+    if inside_project:
+        return "SQLite file in the project's data folder"
+    return "SQLite file at a custom location (set by UFC_RADAR_DB)"
 
 
 def looks_ephemeral(path: str) -> bool:
@@ -93,16 +108,19 @@ def storage_report() -> StorageReport:
     url = postgres_url()
 
     if url:
+        # The PostgreSQL backend is implemented and tested, so this is a
+        # statement of fact rather than a hopeful label.
         return StorageReport(
-            path=path, exists=exists, size_bytes=size, is_ephemeral=False,
-            is_cloud=running_on_cloud(), backend="postgresql (not implemented)",
-            headline="⚠️ PostgreSQL URL set, but this build stores data in SQLite",
+            path=path, exists=True, size_bytes=0, is_ephemeral=False,
+            is_cloud=running_on_cloud(), backend="postgresql",
+            location=describe_location(path),
+            headline="✅ Storage is a managed PostgreSQL database",
             detail=(
-                "A PostgreSQL connection string was found in the environment. This version "
-                "does not include a PostgreSQL driver, so the app is still reading and writing "
-                "the SQLite file below. Nothing has been sent to PostgreSQL."
+                "Collected history lives in PostgreSQL and survives restarts and redeploys. "
+                "This is the option to use on Streamlit Community Cloud, whose own "
+                "filesystem is temporary."
             ),
-            advice=["Remove the variable to avoid confusion, or keep it for a future version."],
+            advice=["Back-ups are your database provider's; the export below covers SQLite only."],
         )
 
     ephemeral = looks_ephemeral(path)
@@ -110,6 +128,7 @@ def storage_report() -> StorageReport:
         return StorageReport(
             path=path, exists=exists, size_bytes=size, is_ephemeral=True,
             is_cloud=running_on_cloud(), backend="sqlite (temporary filesystem)",
+            location=describe_location(path),
             headline="⚠️ This storage is temporary - collected history will be lost on restart",
             detail=(
                 "The database is on a filesystem that gets wiped when the app restarts or "
@@ -117,19 +136,43 @@ def storage_report() -> StorageReport:
                 "accumulate over time."
             ),
             advice=[
-                "Download a backup below before any redeploy, and restore it afterwards.",
-                "For permanent history, run the app on your own PC, or point UFC_RADAR_DB at "
-                "a disk that survives restarts.",
+                "Set DATABASE_URL to a managed PostgreSQL database for permanent history. "
+                "The app uses it directly - nothing else needs changing.",
+                "Or download a backup below before any redeploy, and restore it afterwards.",
+                "Or run the app on your own PC, where the file persists like any other.",
             ],
         )
 
     return StorageReport(
         path=path, exists=exists, size_bytes=size, is_ephemeral=False,
         is_cloud=running_on_cloud(), backend="sqlite (persistent file)",
+        location=describe_location(path),
         headline="✅ Storage is persistent",
         detail="The database is an ordinary file that survives restarts. History accumulates.",
         advice=["Take an occasional backup below; it is a single file you can copy anywhere."],
     )
+
+
+class BackupUnsupportedError(RuntimeError):
+    """Backup/restore here covers SQLite only."""
+
+
+def backup_supported() -> bool:
+    """Whether the file backup/restore path applies to the current backend.
+
+    On PostgreSQL the database is not a file this app owns, and backups are
+    the provider's job (``pg_dump``, managed snapshots). Offering a one-click
+    "backup" that silently did nothing would be worse than not offering one.
+    """
+    return backend_name() != "postgresql"
+
+
+def _require_sqlite() -> None:
+    if not backup_supported():
+        raise BackupUnsupportedError(
+            "This database is PostgreSQL. Use your provider's backups or pg_dump - "
+            "the file export here only applies to SQLite."
+        )
 
 
 def export_database(destination: str) -> str:
@@ -138,6 +181,7 @@ def export_database(destination: str) -> str:
     Uses SQLite's backup API, which is safe to run while the app is reading and
     writing - a plain file copy can capture a torn page.
     """
+    _require_sqlite()
     target = Path(destination)
     target.parent.mkdir(parents=True, exist_ok=True)
     source = get_connection()
@@ -196,7 +240,11 @@ def restore_database(source_path: str, keep_previous: bool = True) -> Dict[str, 
     The current database is renamed aside first (never deleted), so a restore
     that turns out to be the wrong file can be undone by hand.
     """
+    if not backup_supported():
+        return {"ok": False,
+                "error": "This database is PostgreSQL; restore it with your provider's tools."}
     check = validate_backup(source_path)
+
     if not check["ok"]:
         return {"ok": False, "error": check["error"]}
 

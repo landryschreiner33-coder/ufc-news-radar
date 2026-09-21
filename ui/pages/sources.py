@@ -1,4 +1,10 @@
-"""Source health: which feeds work, which are failing, and why."""
+"""Source health: which feeds work, which are failing, and why.
+
+Every source is in exactly one state (see ``database/repo_sources.py``), so
+the counts at the top always add up to the number of sources. An earlier
+build showed "SOURCES 16 · HEALTHY 9 · FAILING 5" and silently left two
+sources out of both buckets.
+"""
 from __future__ import annotations
 
 import streamlit as st
@@ -12,33 +18,45 @@ from ui.components import metric_row, notice, page_header, section_header
 from utils.textutil import truncate
 from utils.timeutil import format_display, humanize_age
 
-STATUS_ICONS = {"ok": "✅", "error": "❌", "disabled": "⚪", "unknown": "❓"}
-
 
 def render(run_collection_callback) -> None:
     page_header("SOURCE HEALTH", "Every source runs on its own - one failure never stops the app.")
-    rows = sources_repo.source_health()
-    ok_count = len([row for row in rows if row["status"] == "ok"])
-    error_count = len([row for row in rows if row["status"] == "error"])
+    summary = sources_repo.health_summary()
+    rows = summary["sources"]
+    counts = summary["counts"]
     x_status = x_status_panel()
-    last_run = runs_repo.last_run()
+    status = runs_repo.collection_status()
+
+    # Every state is shown, so the numbers reconcile with the total.
+    metrics = [("Sources", summary["total"])]
+    for state in sources_repo.HEALTH_STATES:
+        style = sources_repo.HEALTH_STATE_STYLES[state]
+        metrics.append((f'{style["emoji"]} {style["label"]}', counts[state],
+                        state in (sources_repo.ERROR, sources_repo.STALE) and counts[state] > 0))
+    metric_row(metrics)
+    st.caption(
+        f'{" + ".join(str(counts[state]) for state in sources_repo.HEALTH_STATES)} = '
+        f'{summary["total"]} sources. Every source is in exactly one state.'
+    )
 
     metric_row([
-        ("Sources", len(rows)),
-        ("Healthy", ok_count),
-        ("Failing", error_count, error_count > 0),
+        ("Last run", f'{status["emoji"]} {status["label"]}',
+         status["needs_attention"]),
+        ("Sources OK last run", f'{status["sources_ok"]}/{status["sources_attempted"]}'),
+        ("Data from", humanize_age(status["succeeded_at"]) if status["succeeded_at"]
+         else "never collected"),
         ("Articles stored", articles_repo.article_count()),
         ("X API", "OK" if x_status["configured"] else "NOT CONFIGURED", not x_status["configured"]),
-        ("Last run", humanize_age(last_run["started_at"]) if last_run else "never"),
     ])
+    if status["needs_attention"]:
+        notice(f'<b>{status["headline"]}</b><br>{status["detail"]}')
 
     if st.button("\U0001F504 Run collection now", type="primary"):
         run_collection_callback()
 
     section_header("SOURCES", len(rows))
     for row in rows:
-        icon = STATUS_ICONS.get(row["status"], "❓")
-        enabled_label = "enabled" if row["enabled"] else "disabled"
+        style = sources_repo.HEALTH_STATE_STYLES[row["health_state"]]
         last_success = (f"last success {humanize_age(row['last_success_at'])}"
                         if row["last_success_at"] else "no successful fetch yet")
         error_line = ""
@@ -48,9 +66,12 @@ def render(run_collection_callback) -> None:
                 f'{truncate(row["last_error"], 160)} · {humanize_age(row.get("last_error_at"))}</div>'
             )
         st.markdown(
-            f'<div class="panel"><div class="kv">{icon} <b>{row["name"]}</b> '
+            f'<div class="panel"><div class="kv">{style["emoji"]} <b>{row["name"]}</b> '
+            f'<span class="badge" style="background:{style["color"]}22;color:{style["color"]};'
+            f'border:1px solid {style["color"]}55">{style["label"].upper()}</span> '
             f'<span class="muted">· {row["source_type"]} · weight {row["reliability_weight"]} · '
-            f'{enabled_label} · {row["adapter"]}</span></div>'
+            f'{row["adapter"]}</span></div>'
+            f'<div class="muted">{style["meaning"]}</div>'
             f'<div class="muted">{last_success} · {row["article_count"]} items collected · '
             f'latest item {humanize_age(row["last_article_at"]) if row["last_article_at"] else "n/a"}</div>'
             f'<div class="muted">{row.get("resolved_feed_url") or row.get("feed_url") or ""}</div>'
@@ -117,6 +138,7 @@ def _render_runs() -> None:
     frame = pd.DataFrame([
         {
             "Started": format_display(run.get("started_at"), "%b %d %H:%M"),
+            "Outcome": run.get("outcome") or "NOT_RUN",
             "Trigger": run.get("trigger"),
             "Sources OK": f'{run.get("sources_ok")}/{run.get("sources_attempted")}',
             "New articles": run.get("articles_new"),
