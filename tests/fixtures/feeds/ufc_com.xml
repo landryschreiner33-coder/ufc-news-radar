@@ -6,7 +6,7 @@
     <item>
       <title>UFC 320: Jon Jones vs. Tom Aspinall official for heavyweight title</title>
       <link>https://www.ufc.com/news/jones-aspinall-ufc-320-official</link>
-      <pubDate>Thu, 18 Sep 2026 15:00:00 +0000</pubDate>
+      <pubDate>{{minutes_ago:180}}</pubDate>
       <dc:creator>UFC Staff</dc:creator>
       <description>UFC officially announced Thursday that Jon Jones will face Tom Aspinall in the UFC 320 main event for the heavyweight title.</description>
     </item>

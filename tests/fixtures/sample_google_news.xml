@@ -5,14 +5,14 @@
     <item>
       <title>Jon Jones vs. Tom Aspinall booked for UFC 320 - ESPN</title>
       <link>https://news.google.com/rss/articles/CBMi?oc=5&amp;url=https%3A%2F%2Fwww.espn.com%2Fmma%2Fstory%2F_%2Fid%2F12345%2Fjones-aspinall</link>
-      <pubDate>Thu, 18 Sep 2026 14:20:00 GMT</pubDate>
+      <pubDate>{{minutes_ago:220}}</pubDate>
       <description>ESPN reports the heavyweight title fight is set.</description>
       <source url="https://www.espn.com">ESPN</source>
     </item>
     <item>
       <title>Celebrity gossip of the week - Some Tabloid</title>
       <link>https://news.google.com/rss/articles/XYZ</link>
-      <pubDate>Thu, 18 Sep 2026 12:00:00 GMT</pubDate>
+      <pubDate>{{minutes_ago:360}}</pubDate>
       <description>Unrelated content that must be filtered out.</description>
       <source url="https://www.thesun.co.uk">The Sun</source>
     </item>

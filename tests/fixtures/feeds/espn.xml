@@ -6,14 +6,14 @@
     <item>
       <title>Jones vs. Aspinall set for UFC 320 main event</title>
       <link>https://www.espn.com/mma/story/_/id/99001/jones-aspinall-ufc-320</link>
-      <pubDate>Thu, 18 Sep 2026 15:20:00 +0000</pubDate>
+      <pubDate>{{minutes_ago:160}}</pubDate>
       <dc:creator>Brett Okamoto</dc:creator>
       <description>The heavyweight title fight between Jon Jones and Tom Aspinall is official for UFC 320, sources told ESPN.</description>
     </item>
     <item>
       <title>Report: Alex Pereira dealing with hand injury ahead of planned return</title>
       <link>https://www.espn.com/mma/story/_/id/99002/pereira-hand-injury</link>
-      <pubDate>Thu, 18 Sep 2026 12:00:00 +0000</pubDate>
+      <pubDate>{{minutes_ago:360}}</pubDate>
       <dc:creator>Marc Raimondi</dc:creator>
       <description>Alex Pereira is reportedly dealing with a hand injury and could be forced out of his planned bout, sources say.</description>
     </item>

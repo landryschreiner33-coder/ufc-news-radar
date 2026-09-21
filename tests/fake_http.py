@@ -5,12 +5,35 @@ collection code path without touching the network.
 """
 from __future__ import annotations
 
+import re
+from datetime import timedelta
+from email.utils import format_datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from utils.http import HttpResult
+from utils.timeutil import utcnow
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+#: ``{{minutes_ago:145}}`` in a fixture becomes an RFC-822 date that many
+#: minutes before now.
+#:
+#: Feed fixtures used to carry real dates, which quietly rotted: everything
+#: passed until the fixtures aged past the pipeline's freshness windows, and
+#: then a test that had nothing to do with time started failing on a Tuesday
+#: for no reason anyone could see. A fixture that says "two hours old" means
+#: the same thing on every day it is ever run.
+_PLACEHOLDER_RE = re.compile(r"\{\{minutes_ago:(\d+(?:\.\d+)?)\}\}")
+
+
+def render_fixture(text: str) -> str:
+    """Substitute the time placeholders in a fixture's text."""
+    def replace(match: "re.Match[str]") -> str:
+        moment = utcnow() - timedelta(minutes=float(match.group(1)))
+        return format_datetime(moment)
+
+    return _PLACEHOLDER_RE.sub(replace, text)
 
 
 class FakeHttpClient:
@@ -61,6 +84,8 @@ def _materialise(target: Any, url: str) -> HttpResult:
     if not path.is_absolute():
         path = FIXTURES / path
     data = path.read_bytes()
+    if b"{{" in data:
+        data = render_fixture(data.decode("utf-8", errors="replace")).encode("utf-8")
     return HttpResult(ok=True, status_code=200, url=url, content=data,
                       text=data.decode("utf-8", errors="replace"))
 
